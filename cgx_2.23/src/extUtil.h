@@ -22,10 +22,14 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <GL/gl.h>
+/* Step 14: glu.h explicitly — glut_cgx.h used to pull it in; extUtil.h
+   needs the GLU types (GLUnurbsObj) and the glu* calls of the NURBS code. */
+#include <GL/glu.h>
 /* NOTE (Step 6): <GL/glx.h> removed — zero glX* calls in all sources, and Qt
    owns every GL context now (glx.h had smuggled in <X11/Xlib.h>, so include
    it directly for the vestigial Display/Colormap/XColor types below).
-   <GL/glut_cgx.h> stays: header-only GLUT_* constants, no link dependency. */
+   Step 14: <GL/glut_cgx.h> replaced by our own "glut_constants.h" — the
+   GLUT_* values cgx still uses, defined in-tree (no GLUT code at all). */
 #include <X11/Xlib.h>
 #include <pthread.h>
 #include <semaphore.h>
@@ -41,7 +45,7 @@ void printf_fflush(const char *fmt,...);
 }
   #endif
 #else
-  #include <GL/glut_cgx.h>
+  #include "glut_constants.h"
 #endif
 
 #define     PI          3.14159265358979323846264338327950288

@@ -2,20 +2,22 @@
 
 **License:** GNU General Public License version 2, identical to cgx itself —
 see `COPYING`. Every file created by this port carries the upstream
-CALCULIX/GPL header; third-party components keep their own notices
-(`GL/glut_cgx.h` — Mark J. Kilgard, freely distributable, not public domain;
-`libSNL` — Scott A.E. Lanham, GPLv2, see `libSNL/license.txt`).
+CALCULIX/GPL header; the only third-party component in the tree is `libSNL`
+(Scott A.E. Lanham, GPLv2, see `libSNL/license.txt`). Since Step 14 no GLUT
+code, header or notice is shipped either — the GLUT_* values cgx uses live
+in the port's own `src/glut_constants.h`.
 
 Goal: full swap of the vendored GLUT-3.5 windowing/event/menu layer for Qt6,
 in small behavior-checked steps. This file records **every modification** so
 the port can be re-applied onto a future upstream `cgx_X.XX` tarball.
 
-Port status: Steps 0–13 done — port complete (CMake build, Qt app shell,
+Port status: Steps 0–14 done — port complete (CMake build, Qt app shell,
 Qt viewport, input, menus, fonts/X11 removal, axes/cmdline widgets,
 header-only menubar, full-window 3D viewport with 100% transparent HUD legend overlay,
 semi-transparent in-window console panel, Qt-native hardcopy without ImageMagick,
-command line as an opaque overlay band over the whole view, sign-off with
-harness + matrices green).
+command line as an opaque overlay band over the whole view, last external
+`glut-3.5` include dependency replaced by an in-tree constants header,
+sign-off with harness + matrices green).
 
 Standing rule: this file is updated at the end of **every** step — status
 line above, a `### Step N` entry under §3, and any newly touched upstream
@@ -31,11 +33,13 @@ The port is designed so re-application is mechanical:
 | `src/qt/` (15 files) | **OURS, new** | `main.cpp`, `glue.h/.cpp`, `qt_shim.h`, `CgxMainWindow.h/.cpp`, `CgxViews.h/.cpp`, `CgxFont.cpp`, `selftest.cpp`, `ConsoleCapture.h/.cpp`, `ConsoleView.h/.cpp`, `Hardcopy.cpp`. Never exists upstream — copy verbatim. |
 | `tools/console_screencheck.py` | **OURS, new** | Real-screen check that the console panel is above the legend (§Step 11). Copy verbatim. |
 | `src/CMakeLists.txt` | **OURS, new** | Replaces `Makefile`+`Makefile.inc`. Source lists must be re-synced per §5. |
+| `src/glut_constants.h` | **OURS, new** | The 36 GLUT_* values cgx still uses (Step 14) — replaces `<GL/glut_cgx.h>`. Never exists upstream — copy verbatim. |
 | `src/cgx.h` (tail, font tokens) | **Upstream touch 1** | Guarded `#ifdef CGX_QT` include of `qt/qt_shim.h` (see §4) + `GLUT_FONT` redefined to `(void*)0..5` tokens (Step 6; layout macros untouched). |
-| `src/extUtil.h` (2 lines) | **Upstream touch 2** | Deleted `#include <GL/glx.h>` (zero `glX*` calls; it had smuggled in `<X11/Xlib.h>`, now included directly for vestigial types) — see §4. |
+| `src/extUtil.h` (include block) | **Upstream touch 2** | Deleted `#include <GL/glx.h>` (zero `glX*` calls; it had smuggled in `<X11/Xlib.h>`, now included directly for vestigial types), added `<GL/glu.h>` (was pulled in via `glut_cgx.h`), swapped `<GL/glut_cgx.h>` → `"glut_constants.h"` (Step 14) — see §4. |
 | `src/Makefile`, `src/Makefile.inc` | Upstream, retired | Kept as `Makefile.legacy.bak`, `Makefile.inc.legacy.bak` for diffing. |
 | `src/cgx.c` and everything else | **Upstream, UNTOUCHED** | `main()` renamed via compile flag, not by editing (§3). |
-| `../glut-3.5/`, `../libSNL/` | Upstream siblings, untouched | Vendored GLUT still linked (menus/fonts live on it until Steps 5–6). |
+| `../libSNL/` | Upstream sibling, untouched | Compiled and linked (`file(GLOB …)`) — a real build dependency. |
+| `../glut-3.5/` | **not needed (Step 14)** | Was header-only for `<GL/glut_cgx.h>`; now in-tree. The sibling may stay on disk for old cgx versions (2.5/2.22) but cgx_2.23 never reads it. |
 
 ## 2. System prerequisites (Ubuntu 26.04, verified)
 
@@ -211,10 +215,16 @@ Edit 1 — append to the end of `src/cgx.h`:
 #endif
 ```
 
-Edit 2 — in `src/extUtil.h`, delete `#include <GL/glx.h>` (keep the
-`#include <X11/Xlib.h>` line that replaced it: Xlib headers remain a build
-dependency for the vestigial `Display`/`Colormap`/`XColor` types in dead
-signatures; zero `glX*` calls exist anywhere).
+Edit 2 — in `src/extUtil.h`, three include changes (one block):
+
+1. delete `#include <GL/glx.h>` (keep the `#include <X11/Xlib.h>` line that
+   replaced it: Xlib headers remain a build dependency for the vestigial
+   `Display`/`Colormap`/`XColor` types in dead signatures; zero `glX*`
+   calls exist anywhere).
+2. add `#include <GL/glu.h>` (Step 14: `<GL/glut_cgx.h>` used to pull it
+   in; `extUtil.h` needs `GLUnurbsObj` and the NURBS `glu*` calls).
+3. replace `#include <GL/glut_cgx.h>` with `#include "glut_constants.h"`
+   (Step 14 — the in-tree constants, see §3 Step 14).
 
 Edit 3 — in `src/cgx.c`, compile out the three legacy hardcopy bodies
 (`SaveTGAScreenShot`, `getTGAScreenShot`, `createHardcopy`) under
@@ -229,18 +239,20 @@ diffing). Total: copy `qt/` (15 files) + `tools/` +
 `CMakeLists.txt`, apply the §4 edits (now three), sync lists.
 
 1. `cp -r <old>/src/qt <new>/src/qt && cp <old>/src/CMakeLists.txt
-   <new>/src/` (then bump `project(... VERSION …)`).
+   <new>/src/ && cp <old>/src/glut_constants.h <new>/src/` (then bump
+   `project(... VERSION …)`).
 2. Apply the §4 edits (`cgx.h` append incl. Step 12 defines, `extUtil.h`
-   `glx.h` removal, `cgx.c` `#ifndef CGX_QT` guards around the three
-   hardcopy bodies).
+   include block — glx/glu/glut —, `cgx.c` `#ifndef CGX_QT` guards around
+   the three hardcopy bodies).
 3. Sync `CGX_SLIB` with `<new>/src/Makefile.inc` (`SLIB`) plus
    `<new>/src/Makefile` (`ULIB`, currently just `userFunction.c`):
    `diff <(grep -oE '[A-Za-z0-9_]+\.c' old/Makefile.inc | sort)
    <(grep -oE '[A-Za-z0-9_]+\.c' new/Makefile.inc | sort)` — add new files,
    drop removed ones. Then re-drop `XFunktions.c` + `readStdCmap.c` (dead
    X11/GLUT colormap path — re-verify zero callers first).
-4. No `GLUT_SRCS` anymore (deleted in Step 6); keep the
-   `../../glut-3.5/src` include dir for header-only `<GL/glut_cgx.h>`.
+4. No `GLUT_SRCS` anymore (deleted in Step 6) and no
+   `../../glut-3.5/src` include dir (deleted in Step 14): `glut_constants.h`
+   travels with `src/`, so the new tree needs no glut sibling at all.
 5. Conflict checks (all must be empty before building):
    - `grep -n "^int main" <new>/src/cgx.c` — still the single entry renamed
      via `-Dmain=cgx_main`? If upstream renamed/restructured it, adjust
@@ -824,10 +836,48 @@ the line must not fight the stacked GL overlays.
   `cgx_mov_XXXXXX.txt` in the work dir after every `movi`. Override removed;
   `movi frames 2` re-run leaves no file, frames cleaned, `movie.gif` ok.
 
+### Step 14 — drop the last glut-3.5 dependency (in-tree constants header)
+
+Why: after Steps 5–6 the vendored GLUT was dead weight except for one file.
+`<GL/glut_cgx.h>` was still included by `extUtil.h`, `qt/glue.cpp` and
+`qt/CgxViews.cpp` purely for GLUT_* *values* — 36 of them (buttons/states,
+`glutGet` query codes, special keys, display-mode/menu bits, the six bitmap
+font names). That kept a third-party sibling (Kilgard's non-GPL notice) in
+the repo and an external include dir in CMake for zero runtime value.
+
+- New `src/glut_constants.h` (**OURS**): those 36 defines with values
+  bit-identical to GLUT 3.7 — every consumer is cgx plus our own shims, so
+  consistency holds by construction, and identical values mean no numeric
+  behaviour can drift. Carries the upstream CALCULIX/GPL header, so **no
+  third-party code remains in the tree** (only `libSNL`, itself GPLv2).
+- Includes swapped: `extUtil.h` → `"glut_constants.h"`, `qt/glue.cpp` and
+  `qt/CgxViews.cpp` → `"../glut_constants.h"`; stale comments updated
+  (incl. glue.cpp's "colors stay on real vendored GLUT" line, obsolete
+  since Steps 5–6).
+- **Trap — `glut_cgx.h` was also including `<GL/glu.h>`**: `extUtil.h`
+  needs `GLUnurbsObj` (a GLU type it declares around the NURBS helpers),
+  so the first rebuild died with `unknown type name 'GLUnurbsObj'`. Fix:
+  `#include <GL/glu.h>` explicitly in `extUtil.h` (recorded in §4 Edit 2 —
+  an include swap always needs a rebuild *before* you conclude the
+  dependency was unused).
+- `CMakeLists.txt`: `../../glut-3.5/src` dropped from the include dirs
+  (comment block updated). `../../libSNL/src` stays — it is compiled and
+  linked, a genuine dependency.
+- Fonts unchanged: under `CGX_QT`, `cgx.h` redefines `GLUT_FONT` to the
+  positional tokens `(void*)0..5` (Step 6) which `CgxFont.cpp` maps to
+  QFonts; the `GLUT_BITMAP_*` names are kept only for the original macro
+  at the top of `cgx.h` (never expanded after the `#undef`).
+- Not touched on disk: `/usr/local/CalculiX/glut-3.5` remains for the old
+  cgx versions (2.5/2.22); cgx_2.23 simply never reads it any more.
+- Verified: `grep glut_cgx|glut-3.5` over sources/build files → comments
+  only; rebuild rc=0; `-bg` rc=0; selftest rc=0 / 0 FAIL /
+  `SELFTEST-DONE`; `readelf -d` still Qt6+GL/GLU only; `nm` still 0
+  undefined `glut*`. Repo side: `glut-3.5/` removed in the follow-up
+  commit after the initial push (needs no force-push).
+
 ## 9. Roadmap — complete
 
 All steps landed. For future upstream re-applies: follow §5, then §7
 (including the selftest run on xcb). Open polish (non-blocking): initial
 window size (§Step 7 note), `Reshape/Entry/VisibilityFunc` shims still
-parked, vendored `glut-3.5/` dir still on disk (uncompiled) as header
-source for `GLUT_*` constants.
+parked.

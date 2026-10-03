@@ -24,12 +24,11 @@
 //
 // Legacy C code calls these through the glut* names (see qt_shim.h).
 // Only window/display/state/loop entry points are redirected; menus,
-// bitmap fonts, colors and glutInit* stay on real vendored GLUT.
+// bitmap fonts and colours are Qt-side (Steps 5-6, CgxFont.cpp).
 #include "glue.h"
 #include "CgxMainWindow.h"
 #include "CgxViews.h"
-
-#include <GL/glut_cgx.h>
+#include "../glut_constants.h"
 
 #include <QAction>
 #include <QApplication>

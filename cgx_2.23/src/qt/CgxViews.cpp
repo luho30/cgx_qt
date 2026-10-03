@@ -22,8 +22,7 @@
 
 #include "CgxViews.h"
 #include "glue.h"
-
-#include <GL/glut_cgx.h>
+#include "../glut_constants.h"
 
 #include <QCursor>
 #include <QKeyEvent>
@@ -31,7 +30,7 @@
 #include <QPoint>
 #include <QWheelEvent>
 
-// GLUT wheel buttons are a cgx.c-local convention, not in glut_cgx.h:
+// GLUT wheel buttons are a cgx.c-local convention, not in glut_constants.h:
 //   #define GLUT_WEEL_UP 3 / GLUT_WEEL_DOWN 4  (matches X button 4/5)
 enum
 {

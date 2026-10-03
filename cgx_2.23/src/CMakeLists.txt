@@ -170,9 +170,11 @@ set(CGX_SLIB
 
 # Step 6: vendored GLUT 3.5 sources REMOVED from the build. Every remaining
 # glut* call site is served by Qt shims (windows, display, input, menus,
-# bitmap text) or parked as no-op (init/reshape/visibility). The directory
-# ../../glut-3.5 stays on disk (see include dirs: <GL/glut_cgx.h> is still
-# used header-only for GLUT_* constants, no link dependency).
+# bitmap text) or parked as no-op (init/reshape/visibility).
+# Step 14: the last external glut-3.5 dependency (the <GL/glut_cgx.h>
+# constants header) is gone too — src/glut_constants.h defines the GLUT_*
+# values cgx uses, so no GLUT include dir and no glut-3.5/ sibling are
+# needed any more (libSNL stays: it is compiled and linked).
 # (Full SUTIL list preserved in Makefile.legacy.bak for reference.)
 
 # --- C++ sources (Makefile compiled+linked these in one g++ step; here proper objects) ---
@@ -213,7 +215,6 @@ target_include_directories(cgx PRIVATE
   /usr/include
   /usr/include/GL
   ../../libSNL/src
-  ../../glut-3.5/src
 )
 # Legacy /usr/X11/include rarely exists on modern Ubuntu; keep if present.
 if(EXISTS "/usr/X11/include")
