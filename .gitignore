@@ -1,0 +1,18 @@
+# cgx_qt — ignore build outputs and local artifacts.
+# The port code itself is licensed under GPLv2 (see cgx_2.23/COPYING).
+*.o
+*.log
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+/cgx_2.23/src/build/
+/cgx_2.23/src/cgx
+/cgx_2.23/src/bak/
+/cgx_2.23/src/all.fbd
+/cgx_2.23/src/hcpy_*
+/cgx_2.23/src/movie.gif
+/cgx_2.23/src/_*.png
+/cgx_2.23/src/cgx_mov_*
+*~
+*#*
+*.swp
