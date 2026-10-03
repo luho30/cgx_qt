@@ -22,6 +22,10 @@
 
 // In-app end-to-end input test, gated by env CGX_QT_SELFTEST=1.
 //
+// Compiled only with -DCGX_QT_TESTHOOKS (CMake option CGX_QT_TESTHOOKS, OFF
+// by default): a normal build contains none of the CGX_QT_* environment
+// hooks (selftest, scripted startup keys) — see the stub at the end.
+//
 // Why this exists: on Wayland sessions the compositor gates synthetic X11
 // input (xdotool) behind an approval dialog that cannot be clicked
 // headlessly, so driven GUI tests are impossible from the outside. This
@@ -34,6 +38,7 @@
 // `cl` command-line toggle (dock show), QLineEdit exec, Up-history recall,
 // toggle-off (dock hide). Markers go to stderr; command output (help text)
 // goes to stdout for shell-side grep. Exits 0 on SELFTEST-DONE.
+#ifdef CGX_QT_TESTHOOKS
 #include "CgxMainWindow.h"
 #include "CgxViews.h"
 #include "ConsoleCapture.h"
@@ -43,6 +48,8 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QShortcut>
+#include <QByteArray>
+#include <QTemporaryDir>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenuBar>
@@ -68,7 +75,22 @@ extern "C" char *keystroke;
 
 namespace
 {
-const char *kShotDir = "/tmp/opencode";
+// Screenshot directory: CGX_QT_SHOT_DIR if set, otherwise a private
+// QTemporaryDir (mode 0700, removed at exit) — never a fixed /tmp path.
+const char *shotDir()
+{
+  static QByteArray dir;
+  static QTemporaryDir tmp;
+  if (dir.isEmpty())
+  {
+    if (const char *e = std::getenv("CGX_QT_SHOT_DIR"))
+      dir = e;
+    else
+      dir = tmp.path().toLocal8Bit();
+    std::fprintf(stderr, "SELFTEST shotdir=%s\n", dir.constData());
+  }
+  return dir.constData();
+}
 int s_waits = 0;
 int s_settle = 0;
 int s_failures = 0;
@@ -97,7 +119,7 @@ void shot(const char *name)
   if (GraphicsView *g = GV())
   {
     char path[256];
-    std::snprintf(path, sizeof(path), "%s/s7t_%s.png", kShotDir, name);
+    std::snprintf(path, sizeof(path), "%s/s7t_%s.png", shotDir(), name);
     g->grabFramebuffer().save(QString::fromUtf8(path));
     std::fprintf(stderr, "SELFTEST shot=%s\n", path);
   }
@@ -108,7 +130,7 @@ void fullshot(const char *name)
   if (CgxMainWindow *m = MW())
   {
     char path[256];
-    std::snprintf(path, sizeof(path), "%s/s7t_%s.png", kShotDir, name);
+    std::snprintf(path, sizeof(path), "%s/s7t_%s.png", shotDir(), name);
     m->grab().save(QString::fromUtf8(path));
     std::fprintf(stderr, "SELFTEST fullshot=%s\n", path);
   }
@@ -121,7 +143,7 @@ void menuShot(const char *name)
     if (m->menuView())
     {
       char path[256];
-      std::snprintf(path, sizeof(path), "%s/s7t_menu_%s.png", kShotDir, name);
+      std::snprintf(path, sizeof(path), "%s/s7t_menu_%s.png", shotDir(), name);
       m->menuView()->grabFramebuffer().save(QString::fromUtf8(path));
       std::fprintf(stderr, "SELFTEST menu-shot=%s\n", path);
     }
@@ -138,7 +160,7 @@ void axesShot(const char *name)
   }
   QImage img = m->axesView()->grabFramebuffer();
   char path[256];
-  std::snprintf(path, sizeof(path), "%s/s7t_%s.png", kShotDir, name);
+  std::snprintf(path, sizeof(path), "%s/s7t_%s.png", shotDir(), name);
   img.save(QString::fromUtf8(path));
   // The axes overlay is cleared fully transparent: the tripod is the set of
   // pixels with alpha > 0. Expect a small, non-zero fraction.
@@ -185,7 +207,7 @@ void screenCheck(const char *name)
   const QImage real = m->grab().toImage().convertToFormat(QImage::Format_RGB32);
   const QImage fb = g->grabFramebuffer().convertToFormat(QImage::Format_RGB32);
   char path[256];
-  std::snprintf(path, sizeof(path), "%s/s7t_real_%s.png", kShotDir, name);
+  std::snprintf(path, sizeof(path), "%s/s7t_real_%s.png", shotDir(), name);
   real.save(QString::fromUtf8(path));
 
   const QPoint o = g->mapTo(m, QPoint(0, 0)); // 3D view origin inside the window
@@ -805,7 +827,7 @@ void step(int n)
         (void)capBefore;
         // Esc clears the selection and returns the focus to the 3D view.
         c->setSelection(rowLine, 0, rowLine + 1, 12);
-        c->grabFramebuffer().save(QStringLiteral("/tmp/opencode/s11_selection.png"));
+        c->grabFramebuffer().save(QString::fromLocal8Bit(shotDir()) + QStringLiteral("/s11_selection.png"));
         sendSpecial(c, Qt::Key_Escape);
         const bool back = QApplication::focusWidget() == GV() && !c->hasSelection();
         std::fprintf(stderr, "SELFTEST console-esc: focus back on 3D view and selection cleared=%d\n",
@@ -1069,3 +1091,10 @@ extern "C" void cgxMaybeStartSelftest(void)
   std::fprintf(stderr, "SELFTEST armed\n");
   next(0, 500);
 }
+
+#else // !CGX_QT_TESTHOOKS
+
+// Default build: no environment-driven hooks at all.
+extern "C" void cgxMaybeStartSelftest(void) {}
+
+#endif // CGX_QT_TESTHOOKS

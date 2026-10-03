@@ -83,6 +83,14 @@
 
    rm -rf build && cmake -B build -S . && cmake --build build -j$(nproc)
 
+ Optional test build (selftest + scripted startup commands, see §3, §5.9, §6):
+
+   cmake -B build-test -S . -DCGX_QT_TESTHOOKS=ON
+   cmake --build build-test -j$(nproc)
+
+ The default build contains none of the CGX_QT_* environment hooks; only
+ this second binary, src/build-test/cgx, reads them (§8).
+
  Notes:
 
  - The build is CMake-only. The original GLUT Makefile pair is kept as
@@ -126,9 +134,10 @@
                                              offload rendering to the discrete
                                              GPU (nouveau/Mesa tested)
 
- Startup commands without typing (scripted session, ';' = Return):
+ Startup commands without typing (scripted session, ';' = Return) — test
+ build only (cmake -DCGX_QT_TESTHOOKS=ON, see §2):
 
-   CGX_QT_KEYS="ds 1 e 1;view cl" ./build/cgx ../examples/result.frd
+   CGX_QT_KEYS="ds 1 e 1;view cl" ./build-test/cgx ../examples/result.frd
 
 --------------------------------------------------------------------------------
  4. Working with the GUI
@@ -278,6 +287,10 @@
      (help/menu/history, view drag, legend drag, wheel zoom, command-line
      toggle, focus, band hit-testing, screen checks) and exits 0 only if
      everything passes; it prints SELFTEST-DONE and never hangs.
+   - Both hooks exist only in the optional test build (-DCGX_QT_TESTHOOKS=ON);
+     the default binary ignores these environment variables completely.
+     Screenshots go to CGX_QT_SHOT_DIR if set, else a private temporary
+     directory that is removed at exit (its path is printed on stderr).
    - The whole port — including per-step rationale, known traps (stacked
      OpenGL overlays, Wayland/XTEST input quirks) and the exact regression
      commands — is documented in QT-PORT.md so it can be replayed against a
@@ -297,19 +310,22 @@
    # headless batch, works without a display -> exit 0, "done"
    ./build/cgx -bg ../examples/basic/disc.fbd | tail -2
 
+   # test build (once)
+   cmake -B build-test -S . -DCGX_QT_TESTHOOKS=ON && cmake --build build-test -j$(nproc)
+
    # full input/rendering selftest -> exit 0, SELFTEST-DONE, no FAIL
    # (needs a real display; xcb backend)
-   CGX_QT_SELFTEST=1 QT_QPA_PLATFORM=xcb ./build/cgx ../examples/result.frd
+   CGX_QT_SELFTEST=1 QT_QPA_PLATFORM=xcb ./build-test/cgx ../examples/result.frd
 
    # hardcopy formats -> hcpy_1.png/.tga/.gif/.ps + `create ...`/`ready`,
    # no "not found", no stall
    CGX_QT_KEYS="ds 1 e 1;hcpy png;hcpy tga;hcpy gif;hcpy ps" \
-     QT_QPA_PLATFORM=xcb ./build/cgx ../examples/result.frd
+     QT_QPA_PLATFORM=xcb ./build-test/cgx ../examples/result.frd
 
    # movie -> movie.gif (2 frames), frames and temp list cleaned up,
    # exit 0, SELFTEST-DONE
    CGX_QT_SELFTEST_CMDS="movi frames 2" CGX_QT_SELFTEST=1 \
-     QT_QPA_PLATFORM=xcb ./build/cgx ../examples/result.frd
+     QT_QPA_PLATFORM=xcb ./build-test/cgx ../examples/result.frd
 
  Idle CPU with the window open: < 1% (no polling, update-driven redraw).
 
@@ -346,7 +362,43 @@
    rm -rf build && cmake -B build -S . && cmake --build build -j$(nproc)
 
 --------------------------------------------------------------------------------
- 8. Where to find more
+ 8. Security notes
+--------------------------------------------------------------------------------
+
+ What the Qt port does NOT do (checked by source audit and at runtime):
+
+   - no network code: Qt Network/DBus are not linked, the binary imports no
+     socket/connect/getaddrinfo symbols, and under strace the GUI opens only
+     local AF_UNIX sockets (X server, session/accessibility bus, ICE);
+   - no hidden or remotely triggered behaviour: no downloads or custom
+     commands in the build, no obfuscated data, no helper binaries;
+   - the only child process the port starts is ffmpeg (argument list, no
+     shell) for GIF/movie assembly, when you ask for it.
+
+ Re-check it yourself at any time:
+
+   nm -D --undefined-only build/cgx | grep -Ei " (socket|connect|getaddrinfo|dlopen|popen)"
+   readelf -d build/cgx | grep NEEDED             # no Qt Network / DBus
+   strace -f -qq -e trace=%network,execve -o st.txt ./build/cgx ../examples/result.frd
+   bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --unshare-net \
+     ./build/cgx -bg ../examples/basic/disc.fbd     # runs fine without network
+
+ What you should still be careful with (this is classic cgx behaviour):
+
+   - the `sys` command runs shell commands from a command file or the command
+     line. It is locked by default; if cgx asks, answer 's' (stop) for any
+     file you do not trust. Answering 'e' writes ALLOW_SYS into ~/.cgx and
+     unlocks it for every future file — delete that line to lock it again.
+   - the C parsers (frd, fbd, inp, stl, ...) were written without hardening;
+     open files from untrusted sources only in a throw-away environment.
+   - the start banner prints the host name, kernel version and your home
+     directory, and the console panel shows it; redact these before posting
+     console output or screenshots.
+   - the optional test build reads CGX_QT_* environment variables that can
+     type commands into the program: do not use it for daily work.
+
+--------------------------------------------------------------------------------
+ 9. Where to find more
 --------------------------------------------------------------------------------
 
    QT-PORT.md        full port log: 13 steps, decisions, traps, regression

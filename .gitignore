@@ -16,3 +16,4 @@ cmake_install.cmake
 *~
 *#*
 *.swp
+/cgx_2.23/src/build-test/

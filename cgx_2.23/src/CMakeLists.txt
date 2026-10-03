@@ -205,6 +205,16 @@ add_executable(cgx ${CGX_SLIB} ${CGX_CXX_SRCS} ${CGX_QT_SRCS})
 set_source_files_properties(cgx.c PROPERTIES COMPILE_DEFINITIONS "main=cgx_main")
 
 target_compile_definitions(cgx PRIVATE SEMINIT CGX_QT)
+
+# Test hooks (qt/selftest.cpp): the in-app selftest and the scripted startup
+# keys (CGX_QT_SELFTEST / CGX_QT_SELFTEST_CMDS / CGX_QT_SELFTEST_WHEEL /
+# CGX_QT_KEYS / CGX_QT_SHOT_DIR) are compiled in ONLY on request:
+#   cmake -B build-test -S . -DCGX_QT_TESTHOOKS=ON
+# A default build reads none of these environment variables.
+option(CGX_QT_TESTHOOKS "Compile the environment-driven selftest/scripting hooks" OFF)
+if(CGX_QT_TESTHOOKS)
+  target_compile_definitions(cgx PRIVATE CGX_QT_TESTHOOKS)
+endif()
 target_compile_options(cgx PRIVATE
   -O2 -Wall -Wno-narrowing
   $<$<COMPILE_LANGUAGE:C>:-std=gnu17>

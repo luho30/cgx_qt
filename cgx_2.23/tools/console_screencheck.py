@@ -27,7 +27,9 @@ Why external: QWidget::grab() / QScreen::grabWindow() do not reproduce the
 on-screen compositing of the stacked-on-top QOpenGLWidgets (grab() ordering
 differs; grabWindow() returns black), so this is the only reliable check.
 
-Needs an X11 session (runs cgx with QT_QPA_PLATFORM=xcb) and PIL.
+Needs an X11 session (runs cgx with QT_QPA_PLATFORM=xcb), PIL, and a binary
+built with the test hooks (cmake -B build-test -S . -DCGX_QT_TESTHOOKS=ON;
+override the path with CGX_BIN).
 usage (from src/):  python3 ../tools/console_screencheck.py [model.frd]
 exit 0 = pass, 1 = fail.  Prints the numbers it based the decision on.
 """
@@ -40,7 +42,7 @@ env['QT_QPA_PLATFORM'] = 'xcb'
 # result + dataset (shows the legend colour bar), zoom in so the model is under
 # the legend/panel, switch the command line (and with it the console) on.
 env['CGX_QT_KEYS'] = 'ds 1 e 1;view cl;help'
-p = subprocess.Popen(['./build/cgx', model], env=env, stdout=subprocess.DEVNULL,
+p = subprocess.Popen([os.environ.get('CGX_BIN', './build-test/cgx'), model], env=env, stdout=subprocess.DEVNULL,
                      stderr=subprocess.PIPE, text=True)
 geom = None
 t0 = time.time()

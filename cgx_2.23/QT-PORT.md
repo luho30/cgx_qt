@@ -11,13 +11,13 @@ Goal: full swap of the vendored GLUT-3.5 windowing/event/menu layer for Qt6,
 in small behavior-checked steps. This file records **every modification** so
 the port can be re-applied onto a future upstream `cgx_X.XX` tarball.
 
-Port status: Steps 0–14 done — port complete (CMake build, Qt app shell,
+Port status: Steps 0–15 done — port complete (CMake build, Qt app shell,
 Qt viewport, input, menus, fonts/X11 removal, axes/cmdline widgets,
 header-only menubar, full-window 3D viewport with 100% transparent HUD legend overlay,
 semi-transparent in-window console panel, Qt-native hardcopy without ImageMagick,
 command line as an opaque overlay band over the whole view, last external
 `glut-3.5` include dependency replaced by an in-tree constants header,
-sign-off with harness + matrices green).
+test hooks compiled out of the default build (security audit), sign-off with harness + matrices green).
 
 Standing rule: this file is updated at the end of **every** step — status
 line above, a `### Step N` entry under §3, and any newly touched upstream
@@ -32,7 +32,7 @@ The port is designed so re-application is mechanical:
 |---|---|---|
 | `src/qt/` (15 files) | **OURS, new** | `main.cpp`, `glue.h/.cpp`, `qt_shim.h`, `CgxMainWindow.h/.cpp`, `CgxViews.h/.cpp`, `CgxFont.cpp`, `selftest.cpp`, `ConsoleCapture.h/.cpp`, `ConsoleView.h/.cpp`, `Hardcopy.cpp`. Never exists upstream — copy verbatim. |
 | `tools/console_screencheck.py` | **OURS, new** | Real-screen check that the console panel is above the legend (§Step 11). Copy verbatim. |
-| `src/CMakeLists.txt` | **OURS, new** | Replaces `Makefile`+`Makefile.inc`. Source lists must be re-synced per §5. |
+| `src/CMakeLists.txt` | **OURS, new** | Replaces `Makefile`+`Makefile.inc`. Source lists must be re-synced per §5. Option `CGX_QT_TESTHOOKS` (default OFF) compiles the test hooks in (Step 15). |
 | `src/glut_constants.h` | **OURS, new** | The 36 GLUT_* values cgx still uses (Step 14) — replaces `<GL/glut_cgx.h>`. Never exists upstream — copy verbatim. |
 | `src/cgx.h` (tail, font tokens) | **Upstream touch 1** | Guarded `#ifdef CGX_QT` include of `qt/qt_shim.h` (see §4) + `GLUT_FONT` redefined to `(void*)0..5` tokens (Step 6; layout macros untouched). |
 | `src/extUtil.h` (include block) | **Upstream touch 2** | Deleted `#include <GL/glx.h>` (zero `glX*` calls; it had smuggled in `<X11/Xlib.h>`, now included directly for vestigial types), added `<GL/glu.h>` (was pulled in via `glut_cgx.h`), swapped `<GL/glut_cgx.h>` → `"glut_constants.h"` (Step 14) — see §4. |
@@ -319,28 +319,31 @@ nm build/cgx | grep -E " U glut"                        # expect empty
 nm build/cgx | grep -i glut | grep -v " U "             # expect only glut_font
 readelf -d build/cgx | grep NEEDED                      # Qt6 + GL/GLU only
 # Text (Step 6+): ruler/caption/menubar legible in screenshots; A/B vs legacy
+# Test build (Step 15) — the CGX_QT_* hooks below exist ONLY in it:
+cmake -B build-test -S . -DCGX_QT_TESTHOOKS=ON && cmake --build build-test -j$(nproc)
+strings -a build/cgx | grep -c CGX_QT_                  # default build: expect 0
 # Full input suite, portal-proof on Wayland and xcb (Step 7+):
-CGX_QT_SELFTEST=1 QT_QPA_PLATFORM=xcb ./build/cgx ../examples/result.frd
+CGX_QT_SELFTEST=1 QT_QPA_PLATFORM=xcb ./build-test/cgx ../examples/result.frd
 # expect exit 0, SELFTEST-DONE, exactly 3 help executions (since Step 11: the
 # 3rd is typed into the focused console panel and must be forwarded to cgx),
 # dock show/hide 1/0
 # Hardcopy (Step 12+, needs a display + ffmpeg for GIF/movie; X11 + PIL for stacking check):
-CGX_QT_KEYS="ds 1 e 1;hcpy png;hcpy tga;hcpy gif;hcpy ps" QT_QPA_PLATFORM=xcb ./build/cgx ../examples/result.frd
+CGX_QT_KEYS="ds 1 e 1;hcpy png;hcpy tga;hcpy gif;hcpy ps" QT_QPA_PLATFORM=xcb ./build-test/cgx ../examples/result.frd
 # expect hcpy_1.png/.tga/.gif/.ps + `create …`/`ready`, no `not found`, no stall; open them
-CGX_QT_SELFTEST_CMDS="movi frames 2" CGX_QT_SELFTEST=1 QT_QPA_PLATFORM=xcb ./build/cgx ../examples/result.frd
+CGX_QT_SELFTEST_CMDS="movi frames 2" CGX_QT_SELFTEST=1 QT_QPA_PLATFORM=xcb ./build-test/cgx ../examples/result.frd
 # expect `movie.gif` (2 frames), frames cleaned up, SELFTEST-DONE
 # Step 11 (console panel): the same selftest covers it (capture, 5-line panel,
 # scrollbar, echo, selection/copy/focus, 1.7 MB flood = deadlock regression). Stacking vs the legend
 # can ONLY be verified on the real screen:
-python3 ../tools/console_screencheck.py   # exit 0 = PASS (X11 + PIL needed)
+python3 ../tools/console_screencheck.py   # exit 0 = PASS (X11 + PIL + build-test needed)
 # Step 10: also with a result + legend active and geometry under the legend:
 CGX_QT_SELFTEST_WHEEL=-8 CGX_QT_SELFTEST_CMDS="ds 1 e 1" CGX_QT_SELFTEST=1 \
-  QT_QPA_PLATFORM=xcb ./build/cgx ../examples/result.frd   # screen-check lines, no FAIL
+  QT_QPA_PLATFORM=xcb ./build-test/cgx ../examples/result.frd   # screen-check lines, no FAIL
 # Step 13 (command-line overlay): covered by the same selftest runs — expect
 #   `cmdline-visible=1 w3=… flag=1`, `cmdline focus=1 band-hit=QLineEdit`,
 #   NO "squeezed 3D view" FAIL, `cmdline-visible=0 … flag=0` after toggle-off;
 # geometry proof from a KEYS run (stderr):
-CGX_QT_KEYS="ds 1 e 1;view cl" QT_QPA_PLATFORM=xcb ./build/cgx ../examples/result.frd 2>&1 \
+CGX_QT_KEYS="ds 1 e 1;view cl" QT_QPA_PLATFORM=xcb ./build-test/cgx ../examples/result.frd 2>&1 \
   | grep KEYS-DONE    # view=…,201,…,450 console=…,541,…,78 → view bottom −
                       # console bottom = 32 px line band, and view height =
                       # window height − menubar (480 − 30 = 450, no squeeze)
@@ -704,8 +707,8 @@ focus-return wiring in `GraphicsContainer`):**
   display line/column), primary selection after a drag, double click = word,
   triple click = line, new output clears the selection, click focuses the panel,
   a `help` typed into the focused panel reaches cgx (hence 3 helps), Esc returns
-  focus to the 3D view. Eyes-on: `/tmp/opencode/s11_selection.png` (written by
-  the selftest) shows the highlight, also across two lines.
+  focus to the 3D view. Eyes-on: `s11_selection.png` in the selftest's shot dir (written by
+  the selftest; path printed as `SELFTEST shotdir=…`) shows the highlight, also across two lines.
 
 Verification (selftest, exit 0): geometry (`-b disc.fbd`), `result.frd`, and
 `result.frd` with `ds 1 e 1` + zoom all pass; checks: panel visible exactly
@@ -874,6 +877,47 @@ the repo and an external include dir in CMake for zero runtime value.
   `SELFTEST-DONE`; `readelf -d` still Qt6+GL/GLU only; `nm` still 0
   undefined `glut*`. Repo side: `glut-3.5/` removed in the follow-up
   commit after the initial push (needs no force-push).
+
+### Step 15 — security audit; test hooks compiled out of the default build
+
+Why: the Qt layer was AI-generated, so the whole tree (upstream cgx C, libSNL,
+`qt/`, build files, binary) was audited for data exfiltration and anything
+remotely triggerable, then verified at runtime.
+
+- **Static:** no socket/DNS/HTTP/DBus/`QNetwork` code anywhere; only Qt Core/
+  Gui/Widgets/OpenGL(Widgets) linked; the binary imports no network symbol
+  (`system()` is the only exec-type import and is upstream); the single URL
+  string is `http://www.calculix.de` in exported-file headers; no `execute_process`/
+  download/custom command in CMake, no RPATH, no base64/hex blobs, no
+  non-ASCII tricks, no ELF/`.so` files in the repo, only three plain upstream
+  example scripts. Our one child process: `ffmpeg` via `QProcess::execute`
+  with an argument list (no shell), replacing legacy `system("convert …")`.
+- **Runtime (executed):** `bwrap --unshare-net … -bg disc.fbd` rc=0; GUI
+  under `strace -f -e trace=%network,execve`: only `AF_UNIX` sockets (X11,
+  session bus, AT-SPI bus, ICE, nscd) — no `AF_INET/6/PACKET`, no exec except
+  `ffmpeg` and upstream's `rm -f _*.gif` in the hardcopy/movie path; `ss`/`lsof`
+  show no TCP/UDP socket and no child process; file writes only the requested
+  outputs, one `/tmp/cgx_frame_*.png` and the Mesa shader cache.
+- **Residual surface (upstream behaviour, documented in the howto §8):** the
+  `sys` command (locked by default: `ALLOW_SYS_FLAG 0`, unlocked only via
+  `ALLOW_SYS` in `~/.cgx`), unhardened C parsers (886 `strcpy`, 1263
+  `sprintf`, 178 `scanf("%s")`; mitigated by PIE/full RELRO/BIND_NOW/stack
+  protector/fortify), and the banner printing host name and `$HOME`.
+- **Change (ours):** `CGX_QT_SELFTEST`, `_CMDS`, `_WHEEL` and `CGX_QT_KEYS` can
+  type commands into the program, so they no longer exist in the default
+  binary. `qt/selftest.cpp` is compiled only with `-DCGX_QT_TESTHOOKS`
+  (CMake `option(CGX_QT_TESTHOOKS … OFF)`; test binary in `build-test/`);
+  otherwise `cgxMaybeStartSelftest()` is an empty stub. Verified:
+  `strings build/cgx | grep CGX_QT_` → 0 hits, and a default binary started
+  with `CGX_QT_SELFTEST=1 CGX_QT_KEYS="hcpy png"` ignores both.
+- **Change (ours):** the hard-coded absolute screenshot directory under `/tmp` is
+  gone (it was a predictable, shared path): shots
+  go to `CGX_QT_SHOT_DIR` or a private auto-removed `QTemporaryDir`
+  (path printed as `SELFTEST shotdir=…`). `tools/console_screencheck.py` now
+  runs `./build-test/cgx` (override with `CGX_BIN`).
+- Verified on the test build: selftest rc=0 / 0 FAIL / `SELFTEST-DONE` /
+  3 helps, hardcopy png/tga/gif/ps, `movi frames 2` → `movie.gif` without
+  leftovers, `console_screencheck.py` PASS; default build `-bg` rc=0.
 
 ## 9. Roadmap — complete
 
