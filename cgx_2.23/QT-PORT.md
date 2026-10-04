@@ -144,7 +144,8 @@ No git repo. Build system: plain `src/Makefile` + `src/Makefile.inc`
   matching GLUT semantics. This preserves the `pickFunktions.c` pattern of
   swapping `Keyboard()` against `pick()/defineDiv()/defineValue()` with
   zero call-site changes — verified by round-trip (`qenq` swallows `help`,
-  `q` restores it).
+  `q` restores it). The same swap is now also the trigger for the command
+  line's focus hand-off while a selection is in progress (Step 13).
 - `CgxViews.cpp` translates: buttons L/M/R → 0/1/2, wheel → 3/4 (cgx.c-local
   `GLUT_WEEL_UP/DOWN`, not in GLUT headers), F1–F12 → 1–12, arrows → 100–108,
   ASCII from `QKeyEvent::text()` with explicit Esc/Return/Tab/Backspace/
@@ -825,7 +826,8 @@ the line must not fight the stacked GL overlays.
   axes-corner probe (the line deliberately covers the 3D view).
 - Verified: both selftests (`result.frd`, `-b disc.fbd`) exit 0 / 0 FAIL /
   3 help executions / `cmdline-visible` 1→0, `cmdline focus=1
-  band-hit=QLineEdit`; KEYS geometry `view=483,201,640,450
+  band-hit=QLineEdit`, pick hand-off (`pick-capture` / `pick-release` /
+  `pick-backstop`) green; KEYS geometry `view=483,201,640,450
   console=483,541,640,78` → 32 px band, view height 450 = window 480 −
   menubar 30 (whole window, no squeeze); screen-check lines + 
   `console_screencheck.py` PASS with the band excluded; hardcopy, `-bg`
@@ -838,6 +840,29 @@ the line must not fight the stacked GL overlays.
   contradicted its own "autoRemove on destruct" comment and left
   `cgx_mov_XXXXXX.txt` in the work dir after every `movi`. Override removed;
   `movi frames 2` re-run leaves no file, frames cleaned, `movie.gif` ok.
+- **Change (ours): selection focus hand-off.** With the line focused, typing
+  `qenq`+Return left the focus there, so every pick key (`a` `r` `e` … `q`)
+  was inserted into the `QLineEdit` as *text* instead of reaching `pick()`
+  — the line edit is a widget legacy w3 never was (w3 had no keyboard
+  callback at all). Fix, driven by the existing `Keyboard↔pick` swap:
+  - `glue.cpp` flags the swap (`s_keyModal`, `cgxKeyFuncIsModal()`: the w1
+    handler is not `Keyboard`) and calls `CgxMainWindow::setKeyCapture()`.
+  - On capture the 3D view takes the focus (only if the current widget
+    would swallow keys — the view and the console panel already forward
+    them, so a console reader keeps its focus) and the line goes read-only
+    with a "selecting" placeholder; on release the focus returns to the
+    remembered widget — **only** if focus is still on the view (a user who
+    clicked elsewhere mid-pick is not overridden).
+  - Backstop: while modal, `CgxMainWindow::eventFilter` forwards the
+    line's keys to the legacy handler (`forwardKeyPress`, now exported
+    from `CgxViews.cpp`) and swallows them — covers a click back into the
+    line mid-pick and `view cl` toggled on during a pick; Return is
+    swallowed too, so no half-typed command executes mid-selection. Esc
+    keeps its leave-the-line contract.
+  - Selftest (case 11): `qenq` from the dock → `pickFlag=1 modal=1
+    focusView=1`; `q` into the view → `ended=1 focusBackOnLine=1`; `q`
+    sent to the refocused line → `swallowed=1 ended=1` (empty text), and
+    typing works again afterwards.
 
 ### Step 14 — drop the last glut-3.5 dependency (in-tree constants header)
 

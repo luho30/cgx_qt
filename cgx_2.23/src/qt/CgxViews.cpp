@@ -38,8 +38,6 @@ enum
   CgxWeelDown = 4
 };
 
-namespace
-{
 // Qt::Key -> GLUT special code (GLUT_KEY_F1..F12 = 1..12, arrows = 100..108).
 bool qtToGlutSpecial(int qtKey, int &glutKey)
 {
@@ -118,6 +116,8 @@ bool qtToGlutAscii(QKeyEvent *event, unsigned char &ascii)
   }
 }
 
+namespace
+{
 int qtToGlutButton(Qt::MouseButton button, bool &known)
 {
   known = true;
@@ -137,17 +137,20 @@ int qtToGlutButton(Qt::MouseButton button, bool &known)
 
 // Legacy callbacks receive the mouse position with key events; GLUT uses
 // top-left-origin client coords, identical to Qt widget coords.
-QPoint keyEventPos(const QOpenGLWidget *view)
+QPoint keyEventPos(const QWidget *view)
 {
+  if (!view)
+    return QPoint();
   return view->mapFromGlobal(QCursor::pos());
 }
+} // namespace
 
-void forwardKeyPress(const QOpenGLWidget *view, int win, QKeyEvent *event)
+void forwardKeyPress(const QWidget *view, int win, QKeyEvent *event)
 {
   // Legacy GLUT has no Alt concept (glutGetModifiers is unused in cgx), so an
   // Alt-modified key must never reach the parser — in particular Alt+C (the
   // command-line toggle) must not inject a 'c' into the keystroke buffer.
-  if (event->modifiers() & Qt::AltModifier)
+  if (!view || (event->modifiers() & Qt::AltModifier))
     return;
   int special;
   if (qtToGlutSpecial(event->key(), special))
@@ -163,7 +166,6 @@ void forwardKeyPress(const QOpenGLWidget *view, int win, QKeyEvent *event)
     cgxForwardKey(win, ascii, p.x(), p.y());
   }
 }
-} // namespace
 
 // Legacy globals owned by cgx.c (probed for paint diagnostics only).
 extern char drawMode;

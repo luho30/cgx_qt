@@ -77,6 +77,12 @@ void cgxPassiveMotionFunc(CgxMotionFunc f);
 void cgxKeyboardFunc(CgxKeyFunc f);
 void cgxSpecialFunc(CgxSpecialFunc f);
 
+/* 1 while a non-Keyboard key handler (pick/defineDiv/defineValue) owns the
+   keyboard of the 3D view (w1), i.e. a selection is in progress. Set/cleared
+   by the cgxKeyboardFunc swap; also drives the command-line focus hand-off
+   (CgxMainWindow::setKeyCapture). */
+int cgxKeyFuncIsModal(void);
+
 /* legacy window ids for Qt views (w0 menu strip, w1 graphics) */
 int cgxMenuId(void);
 int cgxGraphicsId(void);

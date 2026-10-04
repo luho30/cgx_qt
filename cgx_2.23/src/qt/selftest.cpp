@@ -72,6 +72,7 @@ extern "C" char iniActionsFlag;
 extern "C" char commandLineFlag;
 extern "C" int w3;
 extern "C" char *keystroke;
+extern "C" char pickFlag; // cgx.c: 1 while pick() owns the keyboard
 
 namespace
 {
@@ -875,6 +876,66 @@ void step(int n)
     return;
   }
   case 11:
+  {
+    // Selection focus hand-off (capture + release + line-edit backstop):
+    // a pick command issued from the dock must move the keyboard to the
+    // 3D view — a/r/e/q are selection keys there, never text in the line —
+    // and `q` must bring the focus back to the line. Fully synchronous:
+    // qenq only installs pick(), and a `q` key exits it immediately.
+    QLineEdit *cl = CL();
+    if (cl)
+    {
+      cl->clear();
+      // Real flow: the user's focus sits in the line (click, or the
+      // focus-on-show of the Alt+C toggle) when the command is issued —
+      // synthetic sendEvent() alone does not move focus.
+      cl->setFocus(Qt::OtherFocusReason);
+      sendText(cl, "qenq");
+      sendKey(cl, '\r', QPoint());
+      const int modal = cgxKeyFuncIsModal();
+      const int handed = (QApplication::focusWidget() == g);
+      std::fprintf(stderr, "SELFTEST pick-capture: pickFlag=%d modal=%d focusView=%d\n",
+                   (int)pickFlag, modal, handed);
+      if (!pickFlag || !modal || !handed)
+      {
+        std::fprintf(stderr, "SELFTEST-FAIL pick: no focus hand-off from the command line\n");
+        ++s_failures;
+      }
+      // (a) normal path: `q` typed into the view ends the selection and
+      // the focus returns to the command line automatically.
+      sendKey(g, 'q', QPoint());
+      const int ended = (!pickFlag && !cgxKeyFuncIsModal());
+      const int back = (QApplication::focusWidget() == cl);
+      std::fprintf(stderr, "SELFTEST pick-release: ended=%d focusBackOnLine=%d\n", ended, back);
+      if (!ended || !back)
+      {
+        std::fprintf(stderr, "SELFTEST-FAIL pick: selection did not end with focus restore\n");
+        ++s_failures;
+      }
+      // (b) backstop: focus moved back into the line mid-pick — the key
+      // must still reach pick() and must never appear as text.
+      cl->setFocus(Qt::OtherFocusReason);
+      sendText(cl, "qenq");
+      sendKey(cl, '\r', QPoint());
+      sendKey(cl, 'q', QPoint()); // eventFilter forwards it while modal
+      const int swallowed = cl->text().isEmpty();
+      const int ended2 = (!pickFlag && !cgxKeyFuncIsModal());
+      std::fprintf(stderr, "SELFTEST pick-backstop: swallowed=%d ended=%d\n", swallowed, ended2);
+      if (!swallowed || !ended2)
+      {
+        std::fprintf(stderr, "SELFTEST-FAIL pick: key reached the line edit instead of pick()\n");
+        ++s_failures;
+      }
+      // ...and ordinary typing works again afterwards.
+      sendText(cl, "ab");
+      const int typing = (cl->text() == QStringLiteral("ab"));
+      cl->clear();
+      if (!typing)
+      {
+        std::fprintf(stderr, "SELFTEST-FAIL pick: line edit dead after the selection\n");
+        ++s_failures;
+      }
+    }
     // Switch back off from inside the dock (`view cl` alone only turns on;
     // the toggle lives in menu item 5, off-switch is `view cl off`).
     // NOTE: clear first — step 10 left recalled history in the widget and
@@ -888,6 +949,7 @@ void step(int n)
     std::fprintf(stderr, "SELFTEST step=cl-off\n");
     next(12, 600);
     return;
+  }
   case 12:
   {
     QLineEdit *cl = CL();

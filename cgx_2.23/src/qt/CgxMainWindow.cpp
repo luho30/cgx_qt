@@ -27,6 +27,7 @@
 
 #include <cstdio>
 
+#include <QApplication>
 #include <QKeyEvent>
 #include <QHBoxLayout>
 #include <QLineEdit>
@@ -177,6 +178,7 @@ CgxMainWindow::CgxMainWindow(QWidget *parent) : QMainWindow(parent)
   // (menu item 5 / `cl` command); visibility follows w3, not focus.
   m_cmdLine = m_graphicsContainer->commandLine();
   m_cmdLine->setPlaceholderText(QStringLiteral("cgx command (Return to execute, Up/Down for history)"));
+  m_cmdLinePlaceholder = m_cmdLine->placeholderText();
   m_cmdLine->installEventFilter(this);
   connect(m_cmdLine, &QLineEdit::returnPressed, this, [this]() { submitCmdLine(); });
 
@@ -223,6 +225,56 @@ void CgxMainWindow::setCmdLineVisible(bool visible)
   // console follows the line (they show/hide together).
   if (m_graphicsContainer)
     m_graphicsContainer->setCommandLineVisible(visible);
+  // Edge: the line toggled on while a selection is already in progress —
+  // show the capture state even though setKeyCapture ran earlier.
+  if (visible && cgxKeyFuncIsModal())
+    applyCmdLineCaptureHint(true);
+}
+
+void CgxMainWindow::applyCmdLineCaptureHint(bool capture)
+{
+  if (!m_cmdLine)
+    return;
+  m_cmdLine->setReadOnly(capture);
+  m_cmdLine->setPlaceholderText(capture
+                                    ? QStringLiteral("selecting — keys go to the 3D view, "
+                                                     "q ends the selection")
+                                    : m_cmdLinePlaceholder);
+}
+
+void CgxMainWindow::setKeyCapture(bool capture)
+{
+  if (capture)
+  {
+    // Remember the focus owner only if it would swallow the pick keys; the
+    // 3D view and the console panel already forward them, so leave those
+    // alone (reading/copying the console during a selection must not lose
+    // its focus).
+    QWidget *focus = QApplication::focusWidget();
+    const bool swallowsKeys =
+        focus && focus != static_cast<QWidget *>(graphicsView()) && focus != consoleView();
+    if (swallowsKeys && !m_focusBeforeCapture)
+    {
+      m_focusBeforeCapture = focus;
+      // Hand the keyboard to the legacy handler: pick()/defineDiv() need
+      // the keys, exactly like in the GLUT build where no line edit existed
+      // to steal them.
+      if (GraphicsView *g = graphicsView())
+        g->setFocus(Qt::OtherFocusReason);
+    }
+    applyCmdLineCaptureHint(true);
+  }
+  else
+  {
+    applyCmdLineCaptureHint(false);
+    QWidget *prev = m_focusBeforeCapture.data();
+    m_focusBeforeCapture.clear();
+    // Give the focus back — but only if the user has not moved it elsewhere
+    // in the meantime (clicking the console or the view stays put).
+    if (prev && prev->isVisible() && prev->isEnabled() &&
+        QApplication::focusWidget() == graphicsView())
+      prev->setFocus(Qt::OtherFocusReason);
+  }
 }
 
 void CgxMainWindow::resizeEvent(QResizeEvent *event)
@@ -294,6 +346,16 @@ bool CgxMainWindow::eventFilter(QObject *watched, QEvent *event)
       // the focus back on the 3D view (the text stays, it may be long).
       if (GraphicsView *g = graphicsView())
         g->setFocus(Qt::OtherFocusReason);
+      return true;
+    }
+    // Backstop for a selection in progress (pick/defineDiv/defineValue owns
+    // w1's keyboard, see glue's cgxKeyboardFunc): if focus is (back) on the
+    // line — click, or the line toggled on mid-pick — its keys must reach
+    // the legacy handler instead of becoming text/history/commands. This is
+    // what makes a/r/e/q work no matter where the focus sits.
+    if (cgxKeyFuncIsModal())
+    {
+      forwardKeyPress(graphicsView(), cgxGraphicsId(), key);
       return true;
     }
     const int win = cgxGraphicsId();

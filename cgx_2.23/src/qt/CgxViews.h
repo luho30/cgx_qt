@@ -32,6 +32,18 @@
 //     MIDDLE/RIGHT/wheel/motion/keys delivered as in legacy.
 #include <QOpenGLWidget>
 
+class QKeyEvent;
+class QWidget;
+
+// Translate a Qt key event the way GLUT would (ASCII from text()/explicit
+// fallbacks, F-keys/arrows as GLUT special codes) and deliver it to the
+// legacy handler stored for win. pos comes from the cursor mapped into
+// <view> (legacy key events carry the mouse position). Shared by the views
+// and by the command line's selection-mode backstop (CgxMainWindow).
+bool qtToGlutSpecial(int qtKey, int &glutKey);
+bool qtToGlutAscii(QKeyEvent *event, unsigned char &ascii);
+void forwardKeyPress(const QWidget *view, int win, QKeyEvent *event);
+
 class MenuView : public QOpenGLWidget
 {
   Q_OBJECT

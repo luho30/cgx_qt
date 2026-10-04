@@ -31,6 +31,7 @@
 // subwindow drawn over the bottom of the drawing window, cgx.c reshape).
 // No Q_OBJECT extras: virtual overrides and lambda connects need no moc.
 #include <QMainWindow>
+#include <QPointer>
 
 class MenuView;
 class GraphicsView;
@@ -82,6 +83,13 @@ public:
   QLineEdit *cmdLine() const { return m_cmdLine; }
   void setCmdLineVisible(bool visible);
 
+  // Focus hand-off while a selection (pick/defineDiv/defineValue) owns the
+  // keyboard: called by glue's cgxKeyboardFunc() on every Keyboard<->pick
+  // swap. On capture the 3D view gets the focus (the line would swallow the
+  // pick keys as text); on release the focus returns to whoever had it
+  // before — unless the user moved it elsewhere in the meantime.
+  void setKeyCapture(bool capture);
+
 protected:
   void resizeEvent(QResizeEvent *event) override;
   bool eventFilter(QObject *watched, QEvent *event) override;
@@ -89,9 +97,13 @@ protected:
 private:
   void submitCmdLine();
   void syncCmdLineFromLegacy();
+  void applyCmdLineCaptureHint(bool capture);
 
   GraphicsContainer *m_graphicsContainer;
   QLineEdit *m_cmdLine;
+  // Focus owner before a selection captured the keyboard (null if none)
+  QPointer<QWidget> m_focusBeforeCapture;
+  QString m_cmdLinePlaceholder;
 };
 
 // Implemented in glue.cpp (owns the singleton instance).

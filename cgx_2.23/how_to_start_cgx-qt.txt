@@ -172,6 +172,13 @@
  semi-transparent over the view, and the text can be selected and copied —
  e.g. the node/element numbers of a `qenq` query.
 
+ Selection commands (qadd, qenq, qsur, ...): as soon as one is executed the
+ keyboard moves to the 3D view — the selection keys (e a n r u q ...) act on
+ the model, never on the command line. When the selection ends (`q`), the
+ focus returns to the command line automatically. Clicking into the line
+ during a selection does not trap the keys either: they keep going to the
+ selection until it ends.
+
  Hardcopy (all formats produced inside cgx, no external image tools):
 
    hcpy                     -> hcpy_<n>.tga   (default format)

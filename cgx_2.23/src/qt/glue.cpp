@@ -541,6 +541,7 @@ void cgxPopupMenuFor(int win, int globalX, int globalY)
 extern "C" {
 void reshape(int width, int height);
 void menu(int selection); // legacy main-menu callback in cgx.c (case 5 = command line)
+void Keyboard(unsigned char gkey, int x, int y); // cgx.c: the text-command handler
 } // extern "C"
 
 void cgxToggleCommandLine(void)
@@ -576,6 +577,8 @@ std::map<int, CgxMotionFunc> s_motionFuncs;
 std::map<int, CgxMotionFunc> s_passiveFuncs;
 std::map<int, CgxKeyFunc> s_keyFuncs;
 std::map<int, CgxSpecialFunc> s_specialFuncs;
+// 1 while a selection handler (pick/defineDiv/defineValue) owns w1's keyboard
+bool s_keyModal = false;
 } // namespace
 
 void cgxMouseFunc(CgxMouseFunc f)
@@ -598,6 +601,26 @@ void cgxKeyboardFunc(CgxKeyFunc f)
   // Preserves the pickFunktions.c pattern of swapping Keyboard() against
   // pick()/defineDiv()/defineValue() per window — no call-site edits needed.
   s_keyFuncs[activWindow] = f;
+  // Focus hand-off: while a selection handler owns the keyboard of the 3D
+  // view, keystrokes must reach it — but focus may sit in the command line,
+  // which would swallow them as text (legacy w3 had no keyboard of its own).
+  // Announce the swap so the main window can move focus (and restore it when
+  // Keyboard() comes back). Only w1 matters: keys are delivered to w1.
+  if (activWindow == w1)
+  {
+    const bool modal = (f && f != Keyboard);
+    if (modal != s_keyModal)
+    {
+      s_keyModal = modal;
+      if (s_mainWin)
+        s_mainWin->setKeyCapture(modal);
+    }
+  }
+}
+
+int cgxKeyFuncIsModal(void)
+{
+  return s_keyModal ? 1 : 0;
 }
 
 void cgxSpecialFunc(CgxSpecialFunc f)
