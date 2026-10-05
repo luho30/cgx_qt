@@ -923,7 +923,7 @@ remotely triggerable, then verified at runtime.
   `ffmpeg` and upstream's `rm -f _*.gif` in the hardcopy/movie path; `ss`/`lsof`
   show no TCP/UDP socket and no child process; file writes only the requested
   outputs, one `/tmp/cgx_frame_*.png` and the Mesa shader cache.
-- **Residual surface (upstream behaviour, documented in the howto §8):** the
+- **Residual surface (upstream behaviour, documented in [README.md](../README.md) §8):** the
   `sys` command (locked by default: `ALLOW_SYS_FLAG 0`, unlocked only via
   `ALLOW_SYS` in `~/.cgx`), unhardened C parsers (886 `strcpy`, 1263
   `sprintf`, 178 `scanf("%s")`; mitigated by PIE/full RELRO/BIND_NOW/stack
