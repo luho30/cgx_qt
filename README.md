@@ -2,10 +2,11 @@
 
 How to install, build and start, plus what is new.
 
-- **Applies to:** `/usr/local/CalculiX/cgx_2.23` (the Qt6 port of cgx)
+- **Applies to:** the `cgx_2.23/` tree in this repo (the Qt6 port of cgx) —
+  it builds from any directory, nothing is hardcoded to a path
 - **Written for:** Ubuntu 26.04, x86_64
 - **Verified on:** Qt 6.10.2, GCC 15.2, CMake 4.2, Mesa/nouveau + Intel/NVIDIA hybrid
-- **Date:** 2026-10-03
+- **Date:** 2026-10-03, build instructions updated 2026-10-06
 - **License:** GNU GPL version 2 — same as cgx (see [cgx_2.23/COPYING](cgx_2.23/COPYING))
 
 This document is the user-level guide. The developer-level port log with
@@ -62,6 +63,15 @@ ffmpeg    only for movie/GIF assembly (movi/movie). If it is missing,
 Not required anymore (legacy GLUT build only): freeglut, ImageMagick
 (`convert`), Ghostscript.
 
+Also required: the **libSNL sources** (part of a CalculiX checkout). CMake
+looks for them at `<tree>/libSNL/src` and at the upstream sibling
+`<parent>/libSNL/src` — i.e. next to the cgx directory, as in
+`/usr/local/CalculiX/`. If neither exists, say where they are:
+
+```bash
+cmake -B build -S . -DCGX_LIBSNL_DIR=/path/to/libSNL/src
+```
+
 Runtime libraries of the finished binary:
 
 ```bash
@@ -72,17 +82,35 @@ readelf -d build/cgx | grep NEEDED # Qt6 + libGL + libGLU only
 
 ## 2. Build
 
+The tree builds from wherever it lives: no include/library path is
+hardcoded, Qt6/OpenGL/GLU/Threads/X11 are located with `find_package`, and
+the install step uses `GNUInstallDirs` (the installed binary carries no
+RUNPATH).
+
 Source directory (CMake project):
 
 ```bash
 cd /usr/local/CalculiX/cgx_2.23/src
 ```
 
-Configure and compile (out-of-source, first time):
+Configure, compile and verify — recommended, one command:
+
+```bash
+./build.sh
+```
+
+`build.sh` configures `src/build`, compiles it, then runs the build check
+(see below). Extra configure arguments are passed through, e.g.
+`./build.sh -DCGX_QT_TESTHOOKS=ON`. Environment: `CGX_BUILD_DIR` (build
+directory, default `<src>/build`), `CGX_JOBS` (parallel jobs, default
+`nproc`), `CGX_SKIP_CHECK=1` (skip the trailing check).
+
+The same by hand (out-of-source, first time):
 
 ```bash
 cmake -B build -S .
 cmake --build build -j$(nproc)
+cmake --build build --target check
 ```
 
 Result: `src/build/cgx`
@@ -94,7 +122,34 @@ the changed files). For a clean start:
 rm -rf build && cmake -B build -S . && cmake --build build -j$(nproc)
 ```
 
-Optional test build (selftest + scripted startup commands, see §3, §5.9, §6):
+### Every build and every install is checked
+
+After a build the check script `src/cmake/RunCgxCheck.cmake` runs against the
+freshly built binary and must pass:
+
+1. **headless functional smoke** — `cgx -bg <example>` exits 0 *and* reports
+   `ready` and `done`. Needs no display, so it always runs.
+2. **GL/window probe** — `cgx --glcheck` must create a desktop OpenGL context
+   (not OpenGL ES). Skipped when neither `DISPLAY` nor `WAYLAND_DISPLAY` is
+   set; `-DCGX_REQUIRE_GL=ON` makes a missing display an error instead.
+
+Every child call has a hard timeout (120 s / 60 s), so a check can never hang
+a build or an install, and any failure stops the build — or the install —
+with a non-zero exit. The check runs at four points:
+
+| Hook | Command |
+|---|---|
+| after every relink (POST_BUILD) | `cmake --build build` |
+| explicit target | `cmake --build build --target check` |
+| CTest | `ctest --test-dir build --output-on-failure` |
+| during install, against the installed `bin/cgx` | `cmake --install build --prefix <prefix>` |
+
+Knobs: `-DCGX_BUILD_CHECK=OFF` / `-DCGX_INSTALL_CHECK=OFF` switch the hooks
+off, `-DCGX_CHECK_EXAMPLE=<fbd>` selects another smoke input, `CGX_SKIP_CHECK=1`
+skips the check inside `build.sh`. The check only runs your own
+just-built binary — no downloads, no network (§8).
+
+### Optional test build (selftest + scripted startup commands, see §3, §5.9, §6)
 
 ```bash
 cmake -B build-test -S . -DCGX_QT_TESTHOOKS=ON
@@ -104,13 +159,30 @@ cmake --build build-test -j$(nproc)
 The default build contains none of the `CGX_QT_*` environment hooks; only
 this second binary, `src/build-test/cgx`, reads them (§8).
 
+### Install (optional)
+
+```bash
+cmake --install build --prefix /usr/local     # -> /usr/local/bin/cgx
+```
+
+The install re-runs the check against the installed binary and aborts if it
+fails (`-DCGX_INSTALL_CHECK=OFF` to install anyway). Any prefix works; nothing
+outside it is touched, and the program can still be run straight from
+`src/build/cgx`.
+
 Notes:
 
+- **Renaming or moving the tree** keeps the build directory, but its CMake
+  cache records the old absolute path, so configure then stops with
+  `... does not match the source ... used to generate cache`. `./build.sh`
+  detects exactly that case and recreates the build directory; a plain
+  `rm -rf build` does the same by hand.
 - The build is CMake-only. The original GLUT Makefile pair is kept as
   `src/Makefile.legacy.bak` + `src/Makefile.inc.legacy.bak` for reference; it is
   not maintained or tested any more.
-- Nothing is installed system-wide; the program is run from the build tree.
 - CMake only probes locally installed packages; nothing is downloaded.
+- libSNL must be present (§1); if CMake reports it missing, re-run with
+  `-DCGX_LIBSNL_DIR=<path-to-libSNL/src>`.
 
 ## 3. Start
 
@@ -140,6 +212,18 @@ Usage / parameter list:
 ```text
 ./build/cgx            (banner + options, exits 0)
 ```
+
+GL/window probe (no window, prints the result and exits):
+
+```bash
+./build/cgx --glcheck
+# GL-CHECK OK: desktop OpenGL 4.6 profile=2 renderableType=1   -> exit 0
+# exit 3 = no usable GL context -> a window would NOT open (see §7)
+```
+
+The same probe also runs on every normal GUI start (silently) and is part of
+every build/install check, so a binary that could not open a window never
+gets through a build.
 
 All cgx parameters are unchanged: `-b` (build), `-bg` (background), `-v`
 (default, frd result), `-c` (solver input), `-stl`, `-ng`, `-vtk`, `-foam`, ...
@@ -326,6 +410,10 @@ window, the overlays, the input and the screenshots are produced.
   the default binary ignores these environment variables completely.
   Screenshots go to `CGX_QT_SHOT_DIR` if set, else a private temporary
   directory that is removed at exit (its path is printed on stderr).
+- Build and install are gated: every relink, `--target check`, `ctest` and
+  `cmake --install` run a headless smoke test plus the GL/window probe
+  `cgx --glcheck`, each child with a hard timeout (§2) — a build that could
+  not open a window fails instead of starting blank.
 - The whole port — including per-step rationale, known traps (stacked
   OpenGL overlays, Wayland/XTEST input quirks) and the exact regression
   commands — is documented in [cgx_2.23/QT-PORT.md](cgx_2.23/QT-PORT.md) so it
@@ -333,13 +421,20 @@ window, the overlays, the input and the screenshots are produced.
 
 ## 6. Verification — the checks that were run on this machine
 
-The interactive commands below keep running (press `Ctrl+C` or use `timeout`);
-their result is described behind each one. Written files land in the current
-directory (`src/`):
+The first commands are one-shot (they exit on their own, printing the result
+behind each comment); the interactive ones keep running — press `Ctrl+C` or
+use `timeout`. Written files land in the current directory (`src/`):
 
 ```bash
-# compile (quiet = success)
-cmake --build build -j$(nproc)
+# build + the automatic checks -> "cgx check: all checks passed for .../build/cgx"
+./build.sh
+
+# GL/window probe on its own -> "GL-CHECK OK: desktop OpenGL …", exit 0
+./build/cgx --glcheck
+
+# the same build check, explicitly -> exit 0 (ctest: 1/1 passed)
+cmake --build build --target check
+ctest --test-dir build --output-on-failure
 
 # headless batch, works without a display -> exit 0, "done"
 ./build/cgx -bg ../examples/basic/disc.fbd | tail -2
@@ -360,6 +455,11 @@ CGX_QT_KEYS="ds 1 e 1;hcpy png;hcpy tga;hcpy gif;hcpy ps" \
 # exit 0, SELFTEST-DONE
 CGX_QT_SELFTEST_CMDS="movi frames 2" CGX_QT_SELFTEST=1 \
   QT_QPA_PLATFORM=xcb ./build-test/cgx ../examples/result.frd
+
+# install + the check against the installed binary ->
+# "cgx install check: all checks passed for .../bin/cgx"
+cmake --install build --prefix /tmp/cgx-prefix
+/tmp/cgx-prefix/bin/cgx --glcheck
 ```
 
 Idle CPU with the window open: < 1% (no polling, update-driven redraw).
@@ -380,6 +480,17 @@ Xwayland — the pointer freezes at one spot; this is an environment issue,
 not a cgx bug, and it is why the selftest injects input through Qt itself
 (details: [cgx_2.23/QT-PORT.md](cgx_2.23/QT-PORT.md) §7).
 
+**Compiles fine, but no window opens at all (Wayland), terminal shows
+`Failed to create context: 3009` / `EGL_BAD_MATCH`**
+Run the probe: `./build/cgx --glcheck`. Without a desktop OpenGL context
+cgx exits **3** and prints the reason. Cause: on Wayland the surface format
+must ask for a desktop OpenGL context (`RenderableType: OpenGL`), otherwise
+the platform picks an OpenGL-ES EGL config, `eglCreateContext` fails with
+`EGL_BAD_MATCH (3009)`, the widget never paints and the surface gets no
+buffer — no window at all (on X11 you get an empty window instead). This
+state cannot get past a build any more: the probe runs on every GUI start
+and in every build/install check (§2). Details: QT-PORT §7.
+
 **NVIDIA Optimus / hybrid graphics, black or slow view**
 
 ```bash
@@ -394,6 +505,15 @@ rotate the model, or use `hcpy` and check the captured shot.
 Install ffmpeg; without it the PNG frames are kept and cgx prints a
 message instead of assembling the GIF.
 
+**Configure stops with `... does not match the source ... used to generate
+cache` after the tree was renamed or moved**
+The build directory still belongs to the old path. `./build.sh` detects this
+and recreates it automatically; or do it by hand:
+
+```bash
+rm -rf build && ./build.sh
+```
+
 **Build confusion after switching branches/updates**
 
 ```bash
@@ -407,8 +527,9 @@ What the Qt port does NOT do (checked by source audit and at runtime):
 - no network code: Qt Network/DBus are not linked, the binary imports no
   `socket`/`connect`/`getaddrinfo` symbols, and under `strace` the GUI opens only
   local AF_UNIX sockets (X server, session/accessibility bus, ICE);
-- no hidden or remotely triggered behaviour: no downloads or custom
-  commands in the build, no obfuscated data, no helper binaries;
+- no hidden or remotely triggered behaviour: no downloads in the build, no
+  obfuscated data, no helper binaries — the only thing the build runs in
+  addition to the compiler is your own freshly built cgx (the check, §2);
 - the only child process the port starts is ffmpeg (argument list, no
   shell) for GIF/movie assembly, when you ask for it.
 
@@ -446,6 +567,10 @@ What you should still be careful with (this is classic cgx behaviour):
 - [cgx_2.23/CHANGES](cgx_2.23/CHANGES), [cgx_2.23/README](cgx_2.23/README),
   [cgx_2.23/INSTALL](cgx_2.23/INSTALL) — upstream CalculiX notes (still valid
   for the cgx command set and file formats)
+- [cgx_2.23/src/build.sh](cgx_2.23/src/build.sh) — configure + build + check
+  wrapper; survives renaming/moving the tree
+- [cgx_2.23/src/cmake/RunCgxCheck.cmake](cgx_2.23/src/cmake/RunCgxCheck.cmake)
+  — the build/install check script (headless smoke + `--glcheck`, §2)
 - [cgx_2.23/tools/console_screencheck.py](cgx_2.23/tools/console_screencheck.py)
   — real-screen check of the console panel
 - [cgx_2.23/examples/](cgx_2.23/examples/) — ready-to-run `.fbd` and `.frd`
