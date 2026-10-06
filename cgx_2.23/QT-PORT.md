@@ -32,7 +32,9 @@ The port is designed so re-application is mechanical:
 |---|---|---|
 | `src/qt/` (15 files) | **OURS, new** | `main.cpp`, `glue.h/.cpp`, `qt_shim.h`, `CgxMainWindow.h/.cpp`, `CgxViews.h/.cpp`, `CgxFont.cpp`, `selftest.cpp`, `ConsoleCapture.h/.cpp`, `ConsoleView.h/.cpp`, `Hardcopy.cpp`. Never exists upstream — copy verbatim. |
 | `tools/console_screencheck.py` | **OURS, new** | Real-screen check that the console panel is above the legend (§Step 11). Copy verbatim. |
-| `src/CMakeLists.txt` | **OURS, new** | Replaces `Makefile`+`Makefile.inc`. Source lists must be re-synced per §5. Option `CGX_QT_TESTHOOKS` (default OFF) compiles the test hooks in (Step 15). |
+| `src/cmake/RunCgxCheck.cmake` | **OURS, new** | Build/install gate: headless `-bg` smoke + `--glcheck` OpenGL probe, with hard timeouts so it can never hang a build. Copy verbatim. |
+| `src/build.sh` | **OURS, new** | Configure+build+check wrapper that survives renaming/moving the tree (recreates a build dir whose cache belongs to another path). Copy verbatim, keep `+x`. |
+| `src/CMakeLists.txt` | **OURS, new** | Replaces `Makefile`+`Makefile.inc`. Source lists must be re-synced per §5. Location-independent (all paths derived from `CMAKE_CURRENT_SOURCE_DIR`, libSNL auto-detected, `find_package` for Qt6/OpenGL/GLU/X11 — no hardcoded `/usr/...` paths), `GNUInstallDirs` install rules, and gates: POST_BUILD + `check` target + `ctest` + `cmake --install` (options `CGX_BUILD_CHECK`/`CGX_INSTALL_CHECK`, default ON; `CGX_LIBSNL_DIR`, `CGX_CHECK_EXAMPLE` overridable). Option `CGX_QT_TESTHOOKS` (default OFF) compiles the test hooks in (Step 15). |
 | `src/glut_constants.h` | **OURS, new** | The 36 GLUT_* values cgx still uses (Step 14) — replaces `<GL/glut_cgx.h>`. Never exists upstream — copy verbatim. |
 | `src/cgx.h` (tail, font tokens) | **Upstream touch 1** | Guarded `#ifdef CGX_QT` include of `qt/qt_shim.h` (see §4) + `GLUT_FONT` redefined to `(void*)0..5` tokens (Step 6; layout macros untouched). |
 | `src/extUtil.h` (include block) | **Upstream touch 2** | Deleted `#include <GL/glx.h>` (zero `glX*` calls; it had smuggled in `<X11/Xlib.h>`, now included directly for vestigial types), added `<GL/glu.h>` (was pulled in via `glut_cgx.h`), swapped `<GL/glut_cgx.h>` → `"glut_constants.h"` (Step 14) — see §4. |
@@ -239,9 +241,10 @@ Assume a fresh unpack at `/usr/local/CalculiX/cgx_X.XX/` (keep old tree for
 diffing). Total: copy `qt/` (15 files) + `tools/` +
 `CMakeLists.txt`, apply the §4 edits (now three), sync lists.
 
-1. `cp -r <old>/src/qt <new>/src/qt && cp <old>/src/CMakeLists.txt
-   <new>/src/ && cp <old>/src/glut_constants.h <new>/src/` (then bump
-   `project(... VERSION …)`).
+1. `cp -r <old>/src/qt <new>/src/qt && cp -r <old>/src/cmake <new>/src/ &&
+   cp <old>/src/CMakeLists.txt <new>/src/ && cp <old>/src/build.sh
+   <old>/src/glut_constants.h <new>/src/ && chmod +x <new>/src/build.sh`
+   (then bump `project(... VERSION …)`).
 2. Apply the §4 edits (`cgx.h` append incl. Step 12 defines, `extUtil.h`
    include block — glx/glu/glut —, `cgx.c` `#ifndef CGX_QT` guards around
    the three hardcopy bodies).
@@ -309,10 +312,33 @@ cmake -B build -S . && cmake --build build -j$(nproc)  # must succeed;
 QT_QPA_PLATFORM=offscreen ./build/cgx -bg ../examples/basic/disc.fbd
 env -u DISPLAY ./build/cgx -bg ../examples/basic/cylinder.fbd  # no display OK
 ldd build/cgx | grep -i qt6                            # Qt6 linked (Step 2+)
+# Build/install gates — every child call has a hard timeout, so none of these
+# can hang a build or an install:
+./build.sh                          # configure + build + check; also survives
+                                    # renaming/moving the tree (stale cache)
+./build/cgx --glcheck               # 'GL-CHECK OK: desktop OpenGL …', rc 0
+                                    # (both on Wayland and on xcb)
+cmake --build build --target check  # same check, on demand
+ctest --test-dir build              # 1/1 cgx_check Passed
+cmake --install build --prefix /tmp/cgxinst   # installs bin/cgx, then checks the
+                                    # INSTALLED binary; failure aborts the install
 # Interactive (needs :0; stdout is block-buffered → unbuffer + log to file):
 timeout 25 stdbuf -o0 -e0 ./build/cgx -b ../examples/basic/disc.fbd > /tmp/cgx.log 2>&1
 # expect exit 124 (killed while event loop runs = healthy) and:
 grep -E "GL_MAX_EVAL_ORDER|ready|done|gtol calculated" /tmp/cgx.log
+# Wayland session (the default here: XDG_SESSION_TYPE=wayland, NO platform
+# override) — the same interactive run must pass; 0 context errors is the gate:
+grep -c "Failed to create context" /tmp/cgx.log          # expect 0
+# and the surface must really get buffers: on Wayland a surface without a
+# buffer is never shown, so "no window" is how a GL failure presents itself:
+WAYLAND_DEBUG=client timeout 20 stdbuf -o0 -e0 ./build/cgx -b ../examples/basic/disc.fbd \
+  2>&1 | grep -c "wl_surface#[0-9]*\.attach"             # expect >= 1
+# X11 comparison / fallback (blank-or-not is decided by the WM there, so a
+# window exists even when GL fails — always pair it with the error count):
+QT_QPA_PLATFORM=xcb timeout 25 stdbuf -o0 -e0 ./build/cgx -b ../examples/basic/disc.fbd \
+  > /tmp/cgx_xcb.log 2>&1 &
+sleep 10; xwininfo -root -tree | grep -i CalculiX        # window listed
+wait; grep -c "Failed to create context" /tmp/cgx_xcb.log  # expect 0
 # Visual (Step 3+): run in background, screenshot, compare with legacy ./cgx
 python3 -c "from PIL import ImageGrab; ImageGrab.grab().save('/tmp/cgx.png')"
 # Linkage (Step 6+): no vendored GLUT objects, no direct X libs
@@ -350,8 +376,47 @@ CGX_QT_KEYS="ds 1 e 1;view cl" QT_QPA_PLATFORM=xcb ./build-test/cgx ../examples/
                       # window height − menubar (480 − 30 = 450, no squeeze)
 ```
 
+**Build/install gates (why the "no window" regression cannot come back
+unnoticed).** `qt/main.cpp` probes the GL context on every GUI start *and* on
+`cgx --glcheck`: instead of an app that silently shows nothing it exits 3 with
+the EGL_BAD_MATCH explanation. CMake runs `cmake/RunCgxCheck.cmake` — headless
+`-bg` smoke (always) plus `--glcheck` (when a display exists; skipped with a
+status line otherwise, forced with `-DCGX_REQUIRE_GL=ON`) — four times: as a
+POST_BUILD hook, as the `check` target, as the `ctest` test `cgx_check`, and
+**during `cmake --install`** against the freshly installed binary, where a
+failure aborts the install. Individually disable with `-DCGX_BUILD_CHECK=OFF`
+/ `-DCGX_INSTALL_CHECK=OFF`.
+
+**Rename/move safety.** Every project path comes from
+`CMAKE_CURRENT_SOURCE_DIR` (no `/usr/local/...` is baked in) and libSNL is
+auto-detected (`<tree>/libSNL/src`, else the upstream sibling
+`<parent>/libSNL/src`, override `-DCGX_LIBSNL_DIR=`); a missing libSNL is a
+clear `FATAL_ERROR`, not an empty source list. A build directory remembers the
+absolute path it was configured with, so after renaming the tree plain
+`cmake -B build -S .` refuses with `... does not match the source ... used to
+generate cache` — `./build.sh` detects that (compares `CMAKE_HOME_DIRECTORY`
+with its own location), recreates the build dir and rebuilds; `cmake --fresh`
+(CMake ≥ 3.24) does the same by hand.
+
 `QOpenGLWidget` does not work on the `offscreen` platform — interactive
 checks cannot run headless; use `:0` or Xvfb.
+
+**Wayland/EGL: `QSurfaceFormat::setRenderableType(QSurfaceFormat::OpenGL)` is
+mandatory** (`src/qt/main.cpp`, `initGLFormat()`). Left at
+`DefaultRenderableType` the Wayland QPA settles on an OpenGL-ES EGL config, so
+`eglCreateContext` for the desktop compat 2.1 format fails with
+`EGL_BAD_MATCH (0x3009)` — repeated `QEGLPlatformContext: Failed to create
+context: 3009` / `QOpenGLWidget: Failed to create context`. `QOpenGLWidget`
+then never paints, the Wayland surface never receives a buffer and **no window
+appears at all** (on X11 the window still maps, blank, so the bug looks
+Wayland-only and "cgx starts but shows nothing" is the reported symptom).
+Measured A/B on this box (Qt 6.10.2 + NVIDIA 580.178.04, `disc.fbd`): broken
+binary → 50 context errors / 0 `wl_surface.attach`; fixed → 0 errors / 6
+attaches / desktop `4.6.0 NVIDIA` compatibility profile with `glGenLists` ≠ 0.
+An ES context would be useless for cgx anyway (no display lists, no
+`GL_SELECT`), so forcing desktop GL is the only correct choice — not a
+workaround. Until the fix is applied, `QT_QPA_PLATFORM=xcb` runs the app
+through Xwayland/GLX with a working desktop context.
 
 **External-input caveat on this Wayland session (measured, not guessed):**
 XTEST *keyboard* events reach clients normally, but XTEST *pointer motion
@@ -947,6 +1012,62 @@ remotely triggerable, then verified at runtime.
 ## 9. Roadmap — complete
 
 All steps landed. For future upstream re-applies: follow §5, then §7
-(including the selftest run on xcb). Open polish (non-blocking): initial
-window size (§Step 7 note), `Reshape/Entry/VisibilityFunc` shims still
-parked.
+(including the selftest run on xcb). Wayland EGL: `initGLFormat()` in
+`src/qt/main.cpp` must keep `setRenderableType(QSurfaceFormat::OpenGL)` —
+without it the default (Wayland) run fails `eglCreateContext` with
+`EGL_BAD_MATCH` and shows no window at all (see §7). Open polish
+(non-blocking): initial window size (§Step 7 note),
+`Reshape/Entry/VisibilityFunc` shims still parked.
+
+## 10. Build/install gates & tree-location flexibility
+
+Added because the Wayland "compiles fine, opens no window" regression (§7) was
+only found by a human looking at the screen, and because the tree is expected
+to be renamed/moved (`cgx_2.23` → any other name).
+
+### 10.1 Checks (four hook points + one runtime probe)
+
+| Where | What runs | On failure |
+|---|---|---|
+| runtime, every GUI start | `glCheck()` in `qt/main.cpp` — `QOpenGLContext::create()` with the default format, reject OpenGL ES | exit 3 + stderr explanation (no silent empty desktop) |
+| `cgx --glcheck` | same probe, prints `GL-CHECK OK: desktop OpenGL …` | non-zero exit, no window ever created |
+| POST_BUILD (default ON) | `cmake/RunCgxCheck.cmake` | target build fails, `make` deletes `cgx` |
+| `cmake --build build --target check` / `ctest` | same script | non-zero / failing test |
+| `cmake --install` (default ON) | same script against the **installed** `bin/cgx` | `FATAL_ERROR`, install aborts |
+
+The script always runs the headless `cgx -bg <example>` smoke (must exit 0 and
+report `ready` **and** `done`) and runs `--glcheck` only when `DISPLAY` or
+`WAYLAND_DISPLAY` is set (headless installers get a status line instead of a
+false failure; `-DCGX_REQUIRE_GL=ON` forces it). Every `execute_process` has a
+`TIMEOUT` (120 s smoke / 60 s probe), so neither a build nor an install can
+hang. Knobs: `CGX_BUILD_CHECK`, `CGX_INSTALL_CHECK`, `CGX_CHECK_EXAMPLE`,
+`CGX_REQUIRE_GL`, `CGX_SKIP_CHECK=1 ./build.sh`.
+
+Verified: build → `cgx check: … all checks passed`; install → check runs on
+`<prefix>/bin/cgx` and passes; induced failure (`-DCGX_CHECK_EXAMPLE=/etc/hostname`,
+which prints `done` but never `ready`) → `check` target rc=2 **and** install
+aborted with `cgx install check failed (rc=1)`; script-only failure paths
+(`CGX_BIN=/bin/false`, `/bin/true`, no-display skip) → rc 1/1/0 as designed.
+
+### 10.2 Location flexibility
+
+- No absolute project path is left in `CMakeLists.txt`: sources/includes come
+  from `CMAKE_CURRENT_SOURCE_DIR`, GL/GLU/Threads/X11 from `find_package`,
+  libs from `GNUInstallDirs` (`target_link_directories(/usr/lib/x86_64-linux-gnu)`
+  and the hardcoded `/usr/include{,/GL}` / `/usr/X11/include` entries are gone).
+  The installed binary has **no RUNPATH** (`readelf -d`), so any prefix works.
+- libSNL is auto-detected: `<tree>/libSNL/src`, else the upstream sibling
+  `<parent-of-tree>/libSNL/src`; stale/invalid cache values re-autodetect;
+  empty or missing → explicit `FATAL_ERROR` naming `-DCGX_LIBSNL_DIR=` (a silent
+  empty `file(GLOB …)` used to be the failure mode).
+- `src/build.sh` = configure + build + check. It compares the build dir's
+  `CMAKE_HOME_DIRECTORY` with its own location and, when they differ (tree
+  renamed/moved), recreates the build dir before configuring — plain
+  `cmake -B build -S .` cannot even be run in that case (CMake refuses with
+  `does not match the source … used to generate cache`).
+- Verified end-to-end: a copy of the tree at `/usr/local/CalculiX/
+  cgx_renamed_probe` (stale cache pointing at `cgx_2.23_qt/src`) →
+  `./build.sh` reported the mismatch, recreated `build/`, rebuilt (39 s, `-j8`),
+  both checks passed, `--glcheck` on the renamed binary rc 0; tree copied to a
+  different parent → clear FATAL without libSNL, configures with
+  `-DCGX_LIBSNL_DIR=`. Probe tree removed afterwards.

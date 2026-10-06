@@ -36,7 +36,53 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC OFF)
 set(CMAKE_AUTORCC OFF)
 
+# --- location-independent setup --------------------------------------------
+# Every project path below is derived from this file's own directory, so the
+# tree can be renamed, moved or installed under any prefix without touching
+# the build files (only system packages are located via find_package).
+# Layout: <...>/cgx_X.XX/{src,examples,...} with libSNL as a sibling of the
+# tree (upstream convention: <...>/libSNL/src), or vendored inside the tree.
+get_filename_component(CGX_TREE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+# Autodetect whenever the cached value is empty or no longer valid, so a stale
+# entry from a renamed/moved tree can never block the configure; a user-passed
+# -DCGX_LIBSNL_DIR=... wins as long as it points at a real directory.
+set(_cgx_libsnl "${CGX_LIBSNL_DIR}")
+if(NOT _cgx_libsnl OR NOT IS_DIRECTORY "${_cgx_libsnl}")
+  set(_cgx_libsnl "")
+  foreach(_d "${CGX_TREE_DIR}/libSNL/src" "${CGX_TREE_DIR}/../libSNL/src")
+    if(IS_DIRECTORY "${_d}")
+      get_filename_component(_cgx_libsnl "${_d}" ABSOLUTE)
+      break()
+    endif()
+  endforeach()
+endif()
+set(CGX_LIBSNL_DIR "${_cgx_libsnl}" CACHE PATH
+    "Directory holding the libSNL sources (auto-detected: <tree>/libSNL/src or its upstream sibling)"
+    FORCE)
+if(NOT IS_DIRECTORY "${CGX_LIBSNL_DIR}")
+  message(FATAL_ERROR
+    "libSNL sources not found (searched: <tree>/libSNL/src and "
+    "<parent-of-tree>/libSNL/src, i.e. the upstream sibling of the cgx tree).\n"
+    "Restore libSNL next to the cgx tree, or pass "
+    "-DCGX_LIBSNL_DIR=<path-to-libSNL/src>.")
+endif()
+
+# Example used by the headless part of the build/install check (see
+# cmake/RunCgxCheck.cmake). Point it elsewhere with -DCGX_CHECK_EXAMPLE=...
+set(CGX_CHECK_EXAMPLE "${CGX_TREE_DIR}/examples/basic/disc.fbd" CACHE FILEPATH
+    "Example .fbd used by the cgx build/install check")
+
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+find_package(OpenGL REQUIRED)
+if(NOT OPENGL_GLU_FOUND)
+  message(FATAL_ERROR
+    "GLU not found. cgx needs GL/glu.h and libGLU (Debian/Ubuntu: "
+    "sudo apt install libglu1-mesa-dev).")
+endif()
+find_package(Threads REQUIRED)
+# <X11/Xlib.h> is still included by extUtil.h; the include dir is normally the
+# default /usr/include, but non-standard prefixes are picked up here.
+find_package(X11)
 
 # --- cgx core C sources (mirrors Makefile.inc SLIB) ---
 # Step 6 exclusions (both files 100% dead code — verified zero callers):
@@ -178,7 +224,13 @@ set(CGX_SLIB
 # (Full SUTIL list preserved in Makefile.legacy.bak for reference.)
 
 # --- C++ sources (Makefile compiled+linked these in one g++ step; here proper objects) ---
-file(GLOB LIBSNL_SRCS ../../libSNL/src/*.cpp)
+file(GLOB LIBSNL_SRCS CONFIGURE_DEPENDS "${CGX_LIBSNL_DIR}/*.cpp")
+list(LENGTH LIBSNL_SRCS _cgx_libsnl_count)
+if(_cgx_libsnl_count EQUAL 0)
+  message(FATAL_ERROR
+    "No .cpp files found in '${CGX_LIBSNL_DIR}' — libSNL is missing or empty. "
+    "Restore it or pass -DCGX_LIBSNL_DIR=<path-to-libSNL/src>.")
+endif()
 set(CGX_CXX_SRCS
   uselibSNL.cpp
   generateTet.cpp
@@ -220,23 +272,102 @@ target_compile_options(cgx PRIVATE
   $<$<COMPILE_LANGUAGE:C>:-std=gnu17>
   $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++17>
 )
+# System include dirs (/usr/include, /usr/include/GL) are implicit for the
+# compiler; only the project dirs and a non-standard X11 prefix are added.
 target_include_directories(cgx PRIVATE
-  ./
-  /usr/include
-  /usr/include/GL
-  ../../libSNL/src
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CGX_LIBSNL_DIR}
 )
-# Legacy /usr/X11/include rarely exists on modern Ubuntu; keep if present.
-if(EXISTS "/usr/X11/include")
-  target_include_directories(cgx PRIVATE /usr/X11/include)
+if(X11_FOUND AND NOT X11_INCLUDE_DIR STREQUAL "/usr/include")
+  target_include_directories(cgx PRIVATE ${X11_INCLUDE_DIR})
 endif()
 
-target_link_directories(cgx PRIVATE /usr/lib/x86_64-linux-gnu)
 # Step 6: X11/Xt/Xmu/Xext/Xi/SM/ICE dropped — the only Xlib calls lived in
 # the excluded XFunktions.c/readStdCmap.c (dead code). Remaining X11 types
 # (Display/Colormap/XColor globals) are compile-time only; libx11-dev stays
-# a build dependency for the headers.
+# a build dependency for the headers. GL/GLU come from FindOpenGL so no
+# library directory is hardcoded (works for any prefix and any architecture).
 target_link_libraries(cgx PRIVATE
   Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets
-  GL GLU m pthread rt
+  OpenGL::GL OpenGL::GLU
+  Threads::Threads
+  m
 )
+# librt exists on glibc systems only; link it when the platform has it.
+find_library(CGX_RT_LIBRARY rt)
+if(CGX_RT_LIBRARY)
+  target_link_libraries(cgx PRIVATE ${CGX_RT_LIBRARY})
+endif()
+
+# --- build / install gates (cmake/RunCgxCheck.cmake) -----------------------
+# The check proves two things about the binary that just got built/installed:
+#   * `cgx -bg <example>` runs to ready/done (headless, always), and
+#   * `cgx --glcheck` can create a desktop OpenGL context — the regression
+#     that otherwise leaves Wayland with NO window at all.
+# Parts that cannot run in the current environment are skipped, and every
+# child call has a hard timeout, so neither the build nor `cmake --install`
+# can hang. Disable with -DCGX_BUILD_CHECK=OFF / -DCGX_INSTALL_CHECK=OFF.
+option(CGX_BUILD_CHECK "Run the cgx check after every build of the target" ON)
+option(CGX_INSTALL_CHECK "Run the cgx check during 'cmake --install'" ON)
+set(CGX_CHECK_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunCgxCheck.cmake")
+
+if(CGX_BUILD_CHECK)
+  add_custom_command(TARGET cgx POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -DCGX_BIN=$<TARGET_FILE:cgx>
+            -DCGX_EXAMPLE=${CGX_CHECK_EXAMPLE}
+            -P ${CGX_CHECK_SCRIPT}
+    COMMENT "cgx check: headless smoke + GL/window probe"
+    VERBATIM)
+endif()
+
+enable_testing()
+add_test(NAME cgx_check
+  COMMAND ${CMAKE_COMMAND} -DCGX_BIN=$<TARGET_FILE:cgx>
+          -DCGX_EXAMPLE=${CGX_CHECK_EXAMPLE}
+          -P ${CGX_CHECK_SCRIPT})
+
+add_custom_target(check
+  COMMAND ${CMAKE_COMMAND} -DCGX_BIN=$<TARGET_FILE:cgx>
+          -DCGX_EXAMPLE=${CGX_CHECK_EXAMPLE}
+          -P ${CGX_CHECK_SCRIPT}
+  DEPENDS cgx
+  COMMENT "cgx check: headless smoke + GL/window probe"
+  VERBATIM)
+
+# --- install (prefix is free: -DCMAKE_INSTALL_PREFIX=... or --prefix=...) ---
+include(GNUInstallDirs)
+install(TARGETS cgx RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+if(CGX_INSTALL_CHECK)
+  # The same check, run against the freshly installed binary, so a broken GL
+  # setup fails the install instead of shipping a cgx that opens no window.
+  # ${...} below expands now, \${...} expands at install time.
+  install(CODE "
+    set(_cgx_prefix \"\${CMAKE_INSTALL_PREFIX}\")
+    set(_cgx_destdir \"\$ENV{DESTDIR}\")
+    if(NOT _cgx_destdir STREQUAL \"\")
+      set(_cgx_bin \"\${_cgx_destdir}\${_cgx_prefix}/${CMAKE_INSTALL_BINDIR}/cgx\")
+    else()
+      set(_cgx_bin \"\${_cgx_prefix}/${CMAKE_INSTALL_BINDIR}/cgx\")
+    endif()
+    if(\"${CMAKE_CROSSCOMPILING}\")
+      message(STATUS \"cgx install check skipped (cross-compiling)\")
+    else()
+      message(STATUS \"cgx install check: \${_cgx_bin}\")
+      execute_process(
+        COMMAND \"${CMAKE_COMMAND}\"
+                -DCGX_BIN=\${_cgx_bin}
+                -DCGX_EXAMPLE=${CGX_CHECK_EXAMPLE}
+                -P \"${CGX_CHECK_SCRIPT}\"
+        RESULT_VARIABLE _cgx_check_rc)
+      if(NOT \"\${_cgx_check_rc}\" STREQUAL \"0\")
+        message(FATAL_ERROR
+          \"cgx install check failed (rc=\${_cgx_check_rc}) - refusing to install a \"
+          \"binary that fails the headless smoke or the OpenGL/window check (a GL \"
+          \"setup like this opens NO window on Wayland). Re-run with \"
+          \"-DCGX_INSTALL_CHECK=OFF to install anyway.\")
+      endif()
+    endif()
+  ")
+endif()
+
