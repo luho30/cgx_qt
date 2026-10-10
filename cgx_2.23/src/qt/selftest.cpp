@@ -673,6 +673,57 @@ void displaySetsChecks()
     dm->grab().save(dir + QStringLiteral("/s16_displaysets_popup.png"));
     m->grab().save(dir + QStringLiteral("/s16_displaysets_window.png"));
   }
+
+  // 7) changes while the popup is OPEN: create / modify / delete / slot reuse
+  auto run = [&](const char *cmd) {
+    sendText(g, cmd);
+    sendKey(g, '\r', QPoint());
+  };
+  const int rows0 = tb->rowCount();
+  tb->verticalScrollBar()->setValue(10);
+  run("seta DSnew e all");
+  dm->pollNow();
+  if (tb->rowCount() != rows0 + 1 || dm->rowForSet(QStringLiteral("DSnew")) < 0)
+    fail("open popup: created set did not appear");
+  if (tb->verticalScrollBar()->value() != 10)
+    fail("open popup: scroll position lost on refresh");
+  int rn = dm->rowForSet(QStringLiteral("DSnew"));
+  if (rn >= 0 && (tb->item(rn, 1 + 2)->flags() & Qt::ItemIsEnabled))
+    fail("face cell enabled before the set has faces");
+  run("seta DSnew f all");
+  dm->pollNow();
+  rn = dm->rowForSet(QStringLiteral("DSnew"));
+  if (rn < 0 || !(tb->item(rn, 1 + 2)->flags() & Qt::ItemIsEnabled))
+    fail("open popup: modified set (new faces) not reflected");
+  run("plus e DSnew g");
+  dm->pollNow();
+  rn = dm->rowForSet(QStringLiteral("DSnew"));
+  if (rn < 0 || tb->item(rn, 0)->checkState() != Qt::Checked)
+    fail("open popup: plus from command line not reflected");
+  // slot reuse: delete DSnew, create DSreuse (takes the freed slot), then click
+  // the OLD row without letting the timer run first
+  run("del se DSnew");
+  run("seta DSreuse e all");
+  const int stale = rn;
+  const int reuseIdx = [&]() {
+    for (int i = 0; i < cgxDsSetSlots(); i++)
+      if (cgxDsSetValid(i) && QString::fromUtf8(cgxDsSetName(i)) == QLatin1String("DSreuse"))
+        return i;
+    return -1;
+  }();
+  dm->clickCell(stale, 0);
+  if (reuseIdx < 0 || cgxDsDisplayedMask(reuseIdx) != 0)
+    fail("stale row click acted on a different (slot-reused) set");
+  if (dm->rowForSet(QStringLiteral("DSnew")) >= 0 || dm->rowForSet(QStringLiteral("DSreuse")) < 0)
+    fail("open popup: delete/slot reuse not refreshed after stale click");
+  // recreated name starts from the default selection (remembered one pruned)
+  run("seta DSnew n all");
+  run("seta DSnew e all");
+  dm->pollNow();
+  rn = dm->rowForSet(QStringLiteral("DSnew"));
+  std::fprintf(stderr, "SELFTEST displaysets-live rows=%d\n", tb->rowCount());
+  if (rn < 0 || tb->item(rn, 0)->checkState() == Qt::Checked)
+    fail("recreated set wrongly shown as displayed");
   dm->hide();
   QApplication::processEvents();
 }

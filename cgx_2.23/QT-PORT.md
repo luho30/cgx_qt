@@ -11,13 +11,13 @@ Goal: full swap of the vendored GLUT-3.5 windowing/event/menu layer for Qt6,
 in small behavior-checked steps. This file records **every modification** so
 the port can be re-applied onto a future upstream `cgx_X.XX` tarball.
 
-Port status: Steps 0–16 done — port complete (CMake build, Qt app shell,
+Port status: Steps 0–17 done — port complete (CMake build, Qt app shell,
 Qt viewport, input, menus, fonts/X11 removal, axes/cmdline widgets,
 header-only menubar, full-window 3D viewport with 100% transparent HUD legend overlay,
 semi-transparent in-window console panel, Qt-native hardcopy without ImageMagick,
 command line as an opaque overlay band over the whole view, last external
 `glut-3.5` include dependency replaced by an in-tree constants header,
-test hooks compiled out of the default build (security audit), "Display Sets" menu (Step 16), sign-off with harness + matrices green).
+test hooks compiled out of the default build (security audit), "Display Sets" menu (Steps 16-17), sign-off with harness + matrices green).
 
 Standing rule: this file is updated at the end of **every** step — status
 line above, a `### Step N` entry under §3, and any newly touched upstream
@@ -1050,6 +1050,30 @@ window height. No upstream C file was touched.
   `-b basic/disc.fbd`.
 - Not covered: real mouse clicks on the popup (Wayland XTEST caveat, §7) —
   `clickCell()` is the same code path the `cellClicked` signal calls.
+
+### Step 17 — Display Sets stays current while open
+
+The popup already re-read the legacy state on every open. Remaining gaps were
+changes while it is open and stale row indices:
+
+- `cgxDsSignature()` (bridge): 64-bit FNV hash of everything the menu shows (valid
+  sets with index/name/9 entity counts, every `pset` entry). Cheap even for the
+  17k-set `examples/cad/halter.fbd`.
+- `DisplaySetsMenu`: a 150 ms `QTimer` runs only while the popup is visible
+  (`aboutToShow`/`aboutToHide`) and rebuilds when the signature changed, keeping
+  the scroll position. A timer, not a redraw hook: `seta`/`del` trigger no redraw.
+- **Trap — slot reuse:** `delSet` frees a set slot and the next new set takes it
+  (`getSetNr` returns `-i-10`), so a row's stored index can silently point at a
+  different set. `onCellClicked` therefore verifies index validity, name and
+  signature first; if stale it refreshes and ignores the click. Our own clicks
+  update `m_signature` so they are not mistaken for stale state.
+- Remembered entity selections of sets that no longer exist are pruned on rebuild,
+  so a recreated set of the same name starts from the default selection.
+- Selftest (case 7 of `displaySetsChecks()`): with the popup open, `seta` creates a
+  row, scroll position survives, `seta … f` enables the face cell, `plus e` shows
+  checked, `del se` + `seta` (slot reuse) + immediate click on the old row must not
+  touch the new set. Proven able to fail: with the guard disabled it reports both
+  FAILs.
 
 ## 9. Roadmap — complete
 

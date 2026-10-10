@@ -435,7 +435,9 @@ out). More sets than fit the window get a scrollbar on the right.
   set they only choose what will be shown when the set is ticked.
 - The list always reflects the real state, also for sets you plotted by typing
   `plot e *eng*` or removed with `minus e door`. `plot` and `plus` can still
-  be used as before.
+  be used as before. The list also
+  updates live while it is open (sets created, changed or deleted by
+  commands, scripts or meshing).
 
 ## 6. Verification — the checks that were run on this machine
 

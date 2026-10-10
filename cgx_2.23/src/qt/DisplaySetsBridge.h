@@ -16,6 +16,9 @@ const char *cgxDsSetName(int i);
 int cgxDsEntityCount(int i, int t);   /* entities of type t contained in set i */
 void cgxDsSetColor(int i, float *r, float *g, float *b);
 int cgxDsDisplayedMask(int i);        /* bit t set: type t of set i is on screen */
+/* 64-bit hash of everything the menu shows (sets, names, counts, pset entries);
+   changes whenever a set is created/deleted/modified or the display changes */
+unsigned long long cgxDsSignature(void);
 int cgxDsShow(int i, int t);          /* legacy `plus <t> <set> <col>` (no-op if shown) */
 int cgxDsHide(int i, int t);          /* legacy `minus <t> <set>` (no-op if hidden) */
 

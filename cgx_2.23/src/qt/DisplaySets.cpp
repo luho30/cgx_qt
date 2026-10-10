@@ -33,12 +33,15 @@
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QStyle>
+#include <QScrollBar>
 #include <QTableWidget>
+#include <QTimer>
 #include <QTableWidgetItem>
 #include <QWidgetAction>
 
 #include <algorithm>
 #include <cstdio>
+#include <iterator>
 
 namespace
 {
@@ -97,7 +100,27 @@ DisplaySetsMenu::DisplaySetsMenu(QWidget *parent) : QMenu(parent)
 
   // The popup must always show the live legacy state (sets can be created or
   // plotted from the command line at any time).
-  connect(this, &QMenu::aboutToShow, this, [this]() { rebuild(); });
+  connect(this, &QMenu::aboutToShow, this, [this]() {
+    rebuild();
+    m_timer->start();
+  });
+  connect(this, &QMenu::aboutToHide, this, [this]() { m_timer->stop(); });
+
+  // While open the popup also follows changes made behind its back (scripts,
+  // idle work, finished mesh threads): seta/del do not trigger a redraw, so
+  // a cheap signature poll is the one hook that sees every change.
+  m_timer = new QTimer(this);
+  m_timer->setInterval(150);
+  connect(m_timer, &QTimer::timeout, this, [this]() { checkForChanges(); });
+}
+
+void DisplaySetsMenu::checkForChanges()
+{
+  if (cgxDsSignature() == m_signature)
+    return;
+  const int scroll = m_table->verticalScrollBar()->value();
+  rebuild();
+  m_table->verticalScrollBar()->setValue(scroll);
 }
 
 int DisplaySetsMenu::maskFor(int setIdx) const
@@ -117,6 +140,16 @@ int DisplaySetsMenu::maskFor(int setIdx) const
 void DisplaySetsMenu::rebuild()
 {
   const QSignalBlocker block(m_table);
+  m_signature = cgxDsSignature();
+  // forget remembered selections of sets that no longer exist (a recreated
+  // set of the same name must start from the default selection)
+  for (auto it = m_selected.begin(); it != m_selected.end();)
+  {
+    bool alive = false;
+    for (int i = 0; i < cgxDsSetSlots() && !alive; i++)
+      alive = cgxDsSetValid(i) && QString::fromUtf8(cgxDsSetName(i)) == it->first;
+    it = alive ? std::next(it) : m_selected.erase(it);
+  }
   m_table->clear();
   m_table->setRowCount(0);
 
@@ -246,6 +279,13 @@ void DisplaySetsMenu::onCellClicked(int row, int col)
     return;
   const int idx = n->data(Qt::UserRole).toInt();
   const QString name = QString::fromUtf8(cgxDsSetName(idx));
+  // The row may be stale (set deleted and its slot reused): never act on a
+  // different set than the one the user clicked - refresh instead.
+  if (!cgxDsSetValid(idx) || name != n->text() || cgxDsSignature() != m_signature)
+  {
+    checkForChanges();
+    return;
+  }
   const int shown = cgxDsDisplayedMask(idx);
 
   if (col == 0)
@@ -287,5 +327,6 @@ void DisplaySetsMenu::onCellClicked(int row, int col)
     }
   }
   std::fflush(stdout);
+  m_signature = cgxDsSignature(); // our own change is not "stale"
   refreshStates();
 }

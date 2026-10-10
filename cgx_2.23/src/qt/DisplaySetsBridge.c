@@ -137,3 +137,42 @@ int cgxDsHide(int i, int t)
   printf(" minus %s\n", rec);
   return minus(rec);
 }
+
+static unsigned long long fnv(unsigned long long h, unsigned long long v)
+{
+  int k;
+  for (k = 0; k < 8; k++)
+  {
+    h ^= (v >> (8 * k)) & 0xffu;
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+
+unsigned long long cgxDsSignature(void)
+{
+  unsigned long long h = 1469598103934665603ULL;
+  int i, t, j;
+  const char *p;
+  h = fnv(h, (unsigned long long)cgxDsSetSlots());
+  for (i = 0; i < cgxDsSetSlots(); i++)
+  {
+    if (!cgxDsSetValid(i)) continue;
+    h = fnv(h, (unsigned long long)i);
+    for (p = set[i].name; *p; p++) h = fnv(h, (unsigned char)*p);
+    for (t = 0; t < CGX_DS_NTYPES; t++) h = fnv(h, (unsigned long long)cgxDsEntityCount(i, t));
+  }
+  if (inpformat && pset)
+  {
+    h = fnv(h, (unsigned long long)anzGeo->psets);
+    for (j = 0; j < anzGeo->psets; j++)
+    {
+      h = fnv(h, (unsigned long long)pset[j].nr);
+      h = fnv(h, (unsigned char)pset[j].type[0]);
+      h = fnv(h, (unsigned char)pset[j].type[1]);
+      h = fnv(h, (unsigned char)pset[j].type[2]);
+      h = fnv(h, (unsigned long long)pset[j].col);
+    }
+  }
+  return h;
+}

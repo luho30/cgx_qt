@@ -53,5 +53,5 @@
 
 ## Port documentation (read before touching `src/qt/` or merging a new upstream cgx)
 - `cgx_2.23/QT-PORT.md` is the authoritative port log: section 1 file ownership, 4 upstream edits, 5 re-apply recipe for a new `cgx_X.XX`, 7 verification matrix.
-- Standing rule: every step updates the status line, adds a `### Step N` entry (last is Step 16, Display Sets) and the section 1/4 tables if files change.
+- Standing rule: every step updates the status line, adds a `### Step N` entry (last is Step 17, Display Sets live refresh) and the section 1/4 tables if files change.
 - `/usr/local/CalculiX/README.md` is the user-level install/run guide; update it for user-visible features.
