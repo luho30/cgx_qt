@@ -43,6 +43,8 @@
 #include "CgxViews.h"
 #include "ConsoleCapture.h"
 #include "ConsoleView.h"
+#include "DisplaySets.h"
+#include "DisplaySetsBridge.h"
 #include "glue.h"
 
 #include <QApplication>
@@ -57,6 +59,8 @@
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QScreen>
+#include <QScrollBar>
+#include <QTableWidget>
 #include <QStringList>
 #include <QTimer>
 #include <QWheelEvent>
@@ -549,6 +553,128 @@ void sendSpecial(QObject *target, int qtKey)
   QApplication::sendEvent(target, &press);
   QKeyEvent release(QEvent::KeyRelease, qtKey, Qt::NoModifier);
   QApplication::sendEvent(target, &release);
+}
+
+
+// Step 16: "Display Sets" menu. Creates 40 sets through the real command
+// path, then drives the popup exactly like clicks do (clickCell) and checks
+// the legacy pset state through the bridge.
+void displaySetsChecks()
+{
+  CgxMainWindow *m = MW();
+  GraphicsView *g = GV();
+  if (!m || !g)
+    return;
+  auto fail = [](const char *what) {
+    std::fprintf(stderr, "SELFTEST-FAIL displaysets: %s\n", what);
+    ++s_failures;
+  };
+
+  // 1) menubar position: right after Viewing
+  QStringList menus;
+  for (QAction *act : m->menuBar()->actions())
+    menus << act->text();
+  const int vi = menus.indexOf(QStringLiteral("Viewing"));
+  const int di = menus.indexOf(QStringLiteral("Display Sets"));
+  std::fprintf(stderr, "SELFTEST displaysets-menubar viewing=%d displaysets=%d\n", vi, di);
+  if (vi < 0 || di != vi + 1)
+    fail("menu is not directly after Viewing");
+
+  // 2) many sets -> scrollbar
+  for (int i = 1; i <= 40; ++i)
+  {
+    char cmd[64];
+    std::snprintf(cmd, sizeof cmd, "seta DSt%02d e all", i);
+    sendText(g, cmd);
+    sendKey(g, '\r', QPoint());
+    std::snprintf(cmd, sizeof cmd, "seta DSt%02d n all", i);
+    sendText(g, cmd);
+    sendKey(g, '\r', QPoint());
+  }
+  DisplaySetsMenu *dm = cgxDisplaySetsMenu(m);
+  dm->popup(m->mapToGlobal(QPoint(60, 40)));
+  QApplication::processEvents();
+  QTableWidget *tb = dm->table();
+  std::fprintf(stderr, "SELFTEST displaysets-rows rows=%d tableH=%d scrollMax=%d winH=%d\n",
+               tb->rowCount(), tb->height(), tb->verticalScrollBar()->maximum(), m->height());
+  if (tb->rowCount() < 41) // 40 + all
+    fail("expected >= 41 rows");
+  if (tb->verticalScrollBar()->maximum() <= 0)
+    fail("no vertical scroll range with 41 rows");
+  if (tb->height() > m->height())
+    fail("popup taller than the window");
+
+  // 3) set checkbox on/off
+  const int r = dm->rowForSet(QStringLiteral("DSt02"));
+  if (r < 0)
+  {
+    fail("set DSt02 missing in list");
+    dm->hide();
+    return;
+  }
+  const int idx = tb->item(r, 0)->data(Qt::UserRole).toInt();
+  const int eBit = 1 << 1, fBit = 1 << 0;
+  dm->clickCell(r, 0);
+  int mk = cgxDsDisplayedMask(idx);
+  std::fprintf(stderr, "SELFTEST displaysets-on mask=%d checked=%d\n", mk,
+               tb->item(r, 0)->checkState() == Qt::Checked);
+  if (!(mk & eBit) || tb->item(r, 0)->checkState() != Qt::Checked)
+    fail("set on: elements not displayed / box not checked");
+  // 4) entity checkbox on a displayed set adds a type, second click removes it
+  dm->clickCell(r, 1 + 0); // n
+  mk = cgxDsDisplayedMask(idx);
+  if (!(mk & fBit) || !(mk & eBit))
+    fail("entity n not added on displayed set");
+  dm->clickCell(r, 1 + 0);
+  mk = cgxDsDisplayedMask(idx);
+  if ((mk & fBit) || !(mk & eBit))
+    fail("entity n not removed");
+  dm->clickCell(r, 0);
+  mk = cgxDsDisplayedMask(idx);
+  std::fprintf(stderr, "SELFTEST displaysets-off mask=%d checked=%d\n", mk,
+               tb->item(r, 0)->checkState() == Qt::Checked);
+  if (mk != 0 || tb->item(r, 0)->checkState() == Qt::Checked)
+    fail("set off: still displayed / still checked");
+  // 5) entity click on a HIDDEN set only changes the selection
+  dm->clickCell(r, 1 + 0);
+  if (cgxDsDisplayedMask(idx) != 0)
+    fail("entity click on hidden set displayed something");
+  dm->clickCell(r, 0);
+  mk = cgxDsDisplayedMask(idx);
+  if (!(mk & fBit))
+    fail("remembered entity selection not applied when switching the set on");
+  dm->clickCell(r, 0); // off
+  // 5b) untick the only visible type, then tick the set again: must come back
+  dm->clickCell(r, 0); // on (n)
+  dm->clickCell(r, 1 + 1); // remove e (n still on)
+  dm->clickCell(r, 1 + 0); // remove n -> nothing left, set off
+  if (cgxDsDisplayedMask(idx) != 0)
+    fail("last type untick did not turn the set off");
+  dm->clickCell(r, 0);
+  if (cgxDsDisplayedMask(idx) == 0)
+    fail("switch-on after unticking the last type shows nothing");
+  dm->clickCell(r, 0);
+  dm->hide();
+  QApplication::processEvents();
+
+  // 6) a set plotted from the command line shows up checked after reopening
+  sendText(g, "plus e DSt05 r");
+  sendKey(g, '\r', QPoint());
+  dm->popup(m->mapToGlobal(QPoint(60, 40)));
+  QApplication::processEvents();
+  const int r5 = dm->rowForSet(QStringLiteral("DSt05"));
+  const bool c5 = r5 >= 0 && tb->item(r5, 0)->checkState() == Qt::Checked;
+  std::fprintf(stderr, "SELFTEST displaysets-cmdplot checked=%d\n", c5);
+  if (!c5)
+    fail("set plotted by command not shown as checked");
+  {
+    // eyes-on artefacts: the popup itself and the window behind it
+    const QString dir = QString::fromLocal8Bit(shotDir());
+    dm->grab().save(dir + QStringLiteral("/s16_displaysets_popup.png"));
+    m->grab().save(dir + QStringLiteral("/s16_displaysets_window.png"));
+  }
+  dm->hide();
+  QApplication::processEvents();
 }
 
 void step(int n);
@@ -1085,6 +1211,7 @@ void step(int n)
   case 16:
   {
     selectionChecks();
+    displaySetsChecks();
     if (s_failures)
     {
       std::fprintf(stderr, "SELFTEST-FAILED failures=%d\n", s_failures);

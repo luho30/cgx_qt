@@ -11,13 +11,13 @@ Goal: full swap of the vendored GLUT-3.5 windowing/event/menu layer for Qt6,
 in small behavior-checked steps. This file records **every modification** so
 the port can be re-applied onto a future upstream `cgx_X.XX` tarball.
 
-Port status: Steps 0–15 done — port complete (CMake build, Qt app shell,
+Port status: Steps 0–16 done — port complete (CMake build, Qt app shell,
 Qt viewport, input, menus, fonts/X11 removal, axes/cmdline widgets,
 header-only menubar, full-window 3D viewport with 100% transparent HUD legend overlay,
 semi-transparent in-window console panel, Qt-native hardcopy without ImageMagick,
 command line as an opaque overlay band over the whole view, last external
 `glut-3.5` include dependency replaced by an in-tree constants header,
-test hooks compiled out of the default build (security audit), sign-off with harness + matrices green).
+test hooks compiled out of the default build (security audit), "Display Sets" menu (Step 16), sign-off with harness + matrices green).
 
 Standing rule: this file is updated at the end of **every** step — status
 line above, a `### Step N` entry under §3, and any newly touched upstream
@@ -30,7 +30,7 @@ The port is designed so re-application is mechanical:
 
 | Path (relative to `cgx_X.XX/`) | Ownership | Notes |
 |---|---|---|
-| `src/qt/` (15 files) | **OURS, new** | `main.cpp`, `glue.h/.cpp`, `qt_shim.h`, `CgxMainWindow.h/.cpp`, `CgxViews.h/.cpp`, `CgxFont.cpp`, `selftest.cpp`, `ConsoleCapture.h/.cpp`, `ConsoleView.h/.cpp`, `Hardcopy.cpp`. Never exists upstream — copy verbatim. |
+| `src/qt/` (19 files) | **OURS, new** | `main.cpp`, `glue.h/.cpp`, `qt_shim.h`, `CgxMainWindow.h/.cpp`, `CgxViews.h/.cpp`, `CgxFont.cpp`, `selftest.cpp`, `ConsoleCapture.h/.cpp`, `ConsoleView.h/.cpp`, `Hardcopy.cpp`, `DisplaySets.h/.cpp`, `DisplaySetsBridge.h/.c`. Never exists upstream — copy verbatim. |
 | `tools/console_screencheck.py` | **OURS, new** | Real-screen check that the console panel is above the legend (§Step 11). Copy verbatim. |
 | `src/cmake/RunCgxCheck.cmake` | **OURS, new** | Build/install gate: headless `-bg` smoke + `--glcheck` OpenGL probe, with hard timeouts so it can never hang a build. Copy verbatim. |
 | `src/build.sh` | **OURS, new** | Configure+build+check wrapper that survives renaming/moving the tree (recreates a build dir whose cache belongs to another path). Copy verbatim, keep `+x`. |
@@ -238,7 +238,7 @@ without it the file builds exactly as upstream.
 ## 5. Re-apply recipe for a new upstream `cgx_X.XX`
 
 Assume a fresh unpack at `/usr/local/CalculiX/cgx_X.XX/` (keep old tree for
-diffing). Total: copy `qt/` (15 files) + `tools/` +
+diffing). Total: copy `qt/` (19 files) + `tools/` +
 `CMakeLists.txt`, apply the §4 edits (now three), sync lists.
 
 1. `cp -r <old>/src/qt <new>/src/qt && cp -r <old>/src/cmake <new>/src/ &&
@@ -1008,6 +1008,48 @@ remotely triggerable, then verified at runtime.
 - Verified on the test build: selftest rc=0 / 0 FAIL / `SELFTEST-DONE` /
   3 helps, hardcopy png/tga/gif/ps, `movi frames 2` → `movie.gif` without
   leftovers, `console_screencheck.py` PASS; default build `-bg` rc=0.
+
+### Step 16 — "Display Sets" menu (set on/off + entity-type checkboxes)
+
+What: a menubar entry **Display Sets**, directly after *Viewing*. Its popup is a
+table, one row per set: `[checkbox + colour swatch + name]` then one checkbox
+column per entity type `n e f p l s b S L` (header tooltips give the full names;
+types the set does not contain are greyed out, cell tooltip shows the counts).
+A vertical scrollbar appears on the right when the rows exceed ~70% of the
+window height. No upstream C file was touched.
+
+- **It only drives the unchanged legacy commands.** Showing a type runs
+  `plus <t> <set> <colour> [5 for n/p]`, hiding runs `minus <t> <set>` (echoed
+  to the console as ` plus …` / ` minus …`). `pset[]` stays the single source of
+  truth: the popup re-reads it on every `aboutToShow` and after every click, so
+  sets plotted/removed from the command line show up correctly.
+- `qt/DisplaySetsBridge.{h,c}` (C): the only code that touches `set`/`pset`/
+  `anzGeo`. It is C because `cgx.h` has no `extern "C"` guards (§Step 2 trap);
+  the header is plain C types and safe from C++. Lists live, non-sequence sets
+  (`type==0`, `name!=NULL`) including `all`.
+- `qt/DisplaySets.{h,cpp}` (C++): one persistent `QMenu` (parented to the main
+  window) holding a `QWidgetAction` with a `QTableWidget`. Clicks are handled in
+  `cellClicked` (whole cell toggles; items are not `ItemIsUserCheckable`, so the
+  delegate cannot double-toggle).
+- Semantics: set box on → shows the remembered entity selection (default: first
+  non-empty of `e f s b l p n S L`); set box off → hides all its visible types and
+  remembers them. Entity box on a *visible* set → `plus`/`minus` at once; on a
+  *hidden* set → only changes the selection. Unticking the last visible type
+  turns the set off; that type stays remembered for the next switch-on.
+- Colour: stable per set, `entitycol[3 + setIndex % (entitycols-3)]` (the palette
+  `plot e *` cycles through), shown as the swatch.
+- `glue.cpp`: `cgxRebuildMenuBar()` inserts the menu after *Viewing* (appends if
+  absent) and returns early while the popup is visible — a rebuild would pull the
+  open popup out of the bar. The bar stays dirty and is rebuilt on the next sync.
+- Selftest (`displaySetsChecks()`, test build): menu is right after Viewing; 40
+  command-created sets → scroll range > 0 and popup not taller than the window;
+  set on/off, entity add/remove on a visible set, entity click on a hidden set
+  only changes the selection, selection applied on switch-on, a set plotted with
+  `plus e` shows checked after reopening. Writes `s16_displaysets_popup.png` and
+  `s16_displaysets_window.png` to the shot dir. Green on `result.frd` and
+  `-b basic/disc.fbd`.
+- Not covered: real mouse clicks on the popup (Wayland XTEST caveat, §7) —
+  `clickCell()` is the same code path the `cellClicked` signal calls.
 
 ## 9. Roadmap — complete
 

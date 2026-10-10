@@ -28,6 +28,7 @@
 #include "glue.h"
 #include "CgxMainWindow.h"
 #include "CgxViews.h"
+#include "DisplaySets.h"
 #include "../glut_constants.h"
 
 #include <QAction>
@@ -489,6 +490,10 @@ void cgxRebuildMenuBar()
 {
   if (!s_mainWin)
     return;
+  // Step 16: never pull the Display Sets popup out of the bar while it is open
+  // (the bar stays dirty and is rebuilt by the next sync after it closed).
+  if (cgxDisplaySetsMenu(s_mainWin)->isVisible())
+    return;
   QMenuBar *bar = s_mainWin->menuBar();
   bar->clear();
   auto it = s_attachedMenu.find(s_menuId);
@@ -498,6 +503,7 @@ void cgxRebuildMenuBar()
   if (mit == s_menus.end())
     return;
   CgxMenuCallback cb = mit->second.callback;
+  bool displaySetsAdded = false;
   for (const CgxMenuItem &item : mit->second.items)
   {
     if (item.isSubmenu)
@@ -505,6 +511,12 @@ void cgxRebuildMenuBar()
       QMenu *sub = buildQtMenu(item.submenuId, bar);
       sub->setTitle(item.label.trimmed());
       bar->addMenu(sub);
+      // Step 16: "Display Sets" sits right after "Viewing".
+      if (!displaySetsAdded && item.label.trimmed() == QLatin1String("Viewing"))
+      {
+        bar->addMenu(cgxDisplaySetsMenu(s_mainWin));
+        displaySetsAdded = true;
+      }
     }
     else
     {
@@ -517,6 +529,8 @@ void cgxRebuildMenuBar()
       });
     }
   }
+  if (!displaySetsAdded)
+    bar->addMenu(cgxDisplaySetsMenu(s_mainWin));
   s_menusDirty = false;
 }
 

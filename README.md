@@ -419,6 +419,24 @@ window, the overlays, the input and the screenshots are produced.
   commands — is documented in [cgx_2.23/QT-PORT.md](cgx_2.23/QT-PORT.md) so it
   can be replayed against a future upstream cgx release.
 
+### 5.10 "Display Sets" menu
+
+A new menubar entry **Display Sets** (right after *Viewing*) replaces typing
+`plot`/`plus`/`minus` for the common case. The popup lists every set with a
+checkbox in front of the name (set on/off) and, to the right, one checkbox per
+entity type (`n e f p l s b S L`; types the set does not contain are greyed
+out). More sets than fit the window get a scrollbar on the right.
+
+- Ticking a set runs `plus <type> <set> <colour>` for its selected entity types
+  (default: elements, else faces, surfaces, ...); unticking runs `minus`. The
+  commands are echoed in the console. Each set keeps its own colour (swatch in
+  front of the name).
+- Entity boxes of a visible set add/remove that type immediately; on a hidden
+  set they only choose what will be shown when the set is ticked.
+- The list always reflects the real state, also for sets you plotted by typing
+  `plot e *eng*` or removed with `minus e door`. `plot` and `plus` can still
+  be used as before.
+
 ## 6. Verification — the checks that were run on this machine
 
 The first commands are one-shot (they exit on their own, printing the result

@@ -248,6 +248,8 @@ set(CGX_QT_SRCS
   qt/ConsoleCapture.cpp
   qt/ConsoleView.cpp
   qt/Hardcopy.cpp
+  qt/DisplaySets.cpp
+  qt/DisplaySetsBridge.c
   qt/selftest.cpp
 )
 
