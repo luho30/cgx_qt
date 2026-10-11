@@ -11,13 +11,13 @@ Goal: full swap of the vendored GLUT-3.5 windowing/event/menu layer for Qt6,
 in small behavior-checked steps. This file records **every modification** so
 the port can be re-applied onto a future upstream `cgx_X.XX` tarball.
 
-Port status: Steps 0–17 done — port complete (CMake build, Qt app shell,
+Port status: Steps 0–19 done — port complete (CMake build, Qt app shell,
 Qt viewport, input, menus, fonts/X11 removal, axes/cmdline widgets,
 header-only menubar, full-window 3D viewport with 100% transparent HUD legend overlay,
 semi-transparent in-window console panel, Qt-native hardcopy without ImageMagick,
 command line as an opaque overlay band over the whole view, last external
 `glut-3.5` include dependency replaced by an in-tree constants header,
-test hooks compiled out of the default build (security audit), "Display Sets" menu (Steps 16-17), sign-off with harness + matrices green).
+test hooks compiled out of the default build (security audit), "Display Sets" menu (Steps 16-19), sign-off with harness + matrices green).
 
 Standing rule: this file is updated at the end of **every** step — status
 line above, a `### Step N` entry under §3, and any newly touched upstream
@@ -1074,6 +1074,104 @@ changes while it is open and stale row indices:
   checked, `del se` + `seta` (slot reuse) + immediate click on the old row must not
   touch the new set. Proven able to fail: with the guard disabled it reports both
   FAILs.
+
+### Step 18 — hide the set of a picked entity
+
+Two ways in, both reusing cgx's own pick machinery (no upstream edit):
+
+- **Menu:** first entry of *Display Sets*, "Hide set by picking (Ctrl+click)" →
+  modal pick. Keys: `n e f p l s b S L` pick that entity type under the cursor,
+  `i` closest (default), `a` all entities in the pick area, `r r` sets the area
+  (as in qadd/qenq), `u` undo (shows the last hidden sets again with their
+  original colour/attributes), `q`/Esc ends. Other qadd keys (`m`, `t`, `c`, ...)
+  are swallowed: `m` would run `plus nt all`.
+- **Ctrl+left-click** in the 3D view (also over the legend overlay): one-shot on
+  the displayed entity nearest to the viewer. Every displayed entity type is
+  picked once and the smallest `pick_zmin` wins; types within 1% of the depth
+  range count as equal and the bulkier one wins (b e f s S L l p n). Without
+  that, nodes drawn on a surface beat the surface by ~0.1% depth and a click on
+  the model hid the node set.
+
+How (reworked after a bug report: `a r r e` over many elements was slow and
+flooded the console): the first version reused `qadd`/`pick`, whose `hitAction`
+prints, highlights and `seta`-inserts *every* hit before any set is looked at.
+Now `qt/DisplaySetsBridge.c` has its **own key handler** (`hidePickKey`,
+registered with `glutKeyboardFunc` exactly like `pick`, so the focus hand-off and
+command-line lock fire unchanged; `pickFlag=1`, `pickfunc="qhid"`, the pick
+rectangle is still drawn from `dx_cur/dy_cur`). Keys as in qadd: `n e f p l s b S
+L`, `i`, `a`, `r r`, plus `u`, `q`/Esc.
+
+- **One GL selection pass** (`selectEntities`: same drawing as `goPicking`, incl.
+  the `drawMode==4` / `surfFlag` branches, own select buffer) collects the picked
+  entities of the chosen type into a sorted plain list. No printing, no helper
+  set, no highlight set.
+- **Set-by-set loop** (`hideLoop`): take the first entity of the list, find the
+  displayed set entries containing it (e↔f also via `face[].elem_nr`, with a lazily
+  built per-entry element cache), hide them, remove *every* entity of the hidden
+  sets from the list, repeat until empty. Entities in no displayed set are dropped.
+  An entity in several displayed sets hides all of them; a set containing every
+  element is hidden first and empties the list (selftest case 10).
+- **Trap — `minus()` is O(displayed entries) display-list rebuilds per call**
+  (`updateDispLists()` sits inside its loop): 300 `minus` calls took 127 s. The
+  bridge therefore blanks the `pset[].type` like `minus` does and calls
+  `updateDispLists()` + `ConfigureAndShowWindow_Plot()` once per pick (69 ms for
+  300 sets). This is the one place that writes `pset` directly; `u` restores the
+  blanked entries in place (colour/width kept) and falls back to `plus` if the
+  list changed meanwhile. The Display Sets checkboxes still use plain `plus`/`minus`.
+- The helper set `-HIDEPICK` no longer exists. Internal `-` sets stay out of the
+  popup (`cgxDsSetValid`).
+- Sets with the same type but a different set of entities are not touched: a node
+  set stays when an element is picked, and vice versa.
+- Not covered: a set displayed as faces whose faces are only reachable through a
+  *picked element* of a different set is matched via `face[].elem_nr`; nothing
+  more elaborate.
+- Selftest (`hidePickChecks()`): menu entry first and enabled; modal `e` pick
+  (scans the view for a hit) hides both full element sets and keeps the node set;
+  `u` restores; `a` + `r r` + `e` area pick; `m`/`t` swallowed; Esc ends and
+  `cgxDsCanHidePick()` is true again; Ctrl+click through a real `QMouseEvent`;
+  Ctrl+click on empty space changes nothing; no `-` set in the list; 300
+  single-element sets hidden by one `a r r e` pick (time reported, must stay
+  < 20 s) and undone; superset case (all other sets must stay). Proven able to
+  fail (set matching forced true → 3 FAILs; list filter disabled → 1 FAIL).
+
+### Step 19 — rename sets in the Display Sets popup
+
+Double-click on a set name (or F2 while hovering its row) opens an inline
+`QLineEdit`; Enter accepts, Esc or a click elsewhere cancels. Only the checkbox +
+colour swatch area of the name cell toggles the set now (the name text is for
+editing), so a double-click does not flip the set first. Backed by cgx's own
+`rnam()` (the `rnam <old> <new>` command); `pset[]` holds set *indices*, so what
+is displayed is unaffected.
+
+- `cgxDsCheckName()` / `cgxDsRename()` (bridge) validate, then call `rnam`, echo
+  ` rename <old> to <new>` and move the Step-18 undo records to the new name.
+  Refused (reason in the console and as a tooltip at the editor, editor stays
+  open, old name kept): empty, > 100 chars, anything but visible ASCII (UTF-8
+  bytes are negative `char`s; `getSetNr` treats a negative hash sum as illegal and
+  overwrites the name with `0000`), blanks, `*` (the plot/plus wildcard), a leading
+  `-` (internal sets), pure numbers (`getSetNr` also accepts set indices), an
+  existing name, and the names cgx looks up itself. Those reserved sets
+  (`all`, `:NOSAVE`, `+EDGE`, `+PENTR`, `+PLT2D`, `+THRS`, `:ETMP`, `+CF…`) cannot
+  be renamed at all (`cgxDsIsProtected`).
+- **Trap — Enter in an editor inside a popup menu:** `QLineEdit` emits
+  `returnPressed` but then *ignores* the key, so it travels up to the `QMenu`,
+  which triggers its current action — "Hide set by picking" started by itself
+  (found because later selftest commands went into the pick mode). The editor's
+  event filter consumes Return/Enter and commits itself; Esc is consumed too so
+  the menu does not close.
+- The 150 ms refresh (Step 17) never rebuilds under an open editor; if the edited
+  set itself was changed elsewhere (renamed, deleted) the edit is dropped, and any
+  pending change is shown when the edit ends. The remembered entity selection
+  (`m_selected`) follows the rename.
+- Selftest (`renameChecks()`, real `QMouseEvent`s on the table viewport and real
+  key events on the editor): name click does not toggle, checkbox click does;
+  double-click opens an editor that has the keyboard focus; accept renames the
+  same set and the row; `plus`/`minus`/menu toggle work with the new name; 11
+  refused names; Esc; `all` not editable; `rnam` from the command line shows in
+  the open popup; editor survives unrelated changes; outside rename cancels it;
+  selection memory survives; hide-pick undo after a rename (proven able to fail:
+  without moving the undo records it reports a FAIL). `s19_rename_editor.png`
+  is written to the shot dir.
 
 ## 9. Roadmap — complete
 

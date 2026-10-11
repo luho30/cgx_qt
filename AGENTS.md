@@ -42,7 +42,7 @@
 - stdout is captured by `ConsoleCapture` (pipe + reader thread, tee to the original fd); `-bg` never installs it.
 - Hardcopy is source-renamed, not linker-`--wrap`ped (`--wrap` misses same-TU calls); capture is deferred until after paint.
 - Menus: GLUT menu API is mirrored in `glue.cpp` and rendered into a `QMenuBar` (rebuilt when dirty). Persistent Qt-only menus ("Display Sets", `qt/DisplaySets.*`) are inserted in `cgxRebuildMenuBar()`; it must not rebuild while that popup is visible.
-- Displayed sets are the C array `pset[]` (`anzGeo->psets`), changed only through the `plus`/`minus`/`plot` commands. Drive those, don't edit `pset` directly.
+- Displayed sets are the C array `pset[]` (`anzGeo->psets`), changed only through the `plus`/`minus`/`plot` commands. Drive those, don't edit `pset` directly. `minus()` rebuilds all display lists per call (very slow in loops); batch features blank `pset[].type` and refresh once (see Step 18). Pick-driven features register their own key handler via `glutKeyboardFunc` and run one GL selection pass, not `pick()`/`hitAction` (it prints and inserts per hit); `-`-prefixed sets are cgx-internal and hidden from the menu.
 
 ## Gotchas
 - `-bg` needs no display; every GUI path needs a real X11 or Wayland session.
@@ -53,5 +53,5 @@
 
 ## Port documentation (read before touching `src/qt/` or merging a new upstream cgx)
 - `cgx_2.23/QT-PORT.md` is the authoritative port log: section 1 file ownership, 4 upstream edits, 5 re-apply recipe for a new `cgx_X.XX`, 7 verification matrix.
-- Standing rule: every step updates the status line, adds a `### Step N` entry (last is Step 17, Display Sets live refresh) and the section 1/4 tables if files change.
+- Standing rule: every step updates the status line, adds a `### Step N` entry (last is Step 19, rename sets) and the section 1/4 tables if files change.
 - `/usr/local/CalculiX/README.md` is the user-level install/run guide; update it for user-visible features.

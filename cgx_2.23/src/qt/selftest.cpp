@@ -48,6 +48,7 @@
 #include "glue.h"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QClipboard>
 #include <QShortcut>
 #include <QByteArray>
@@ -728,6 +729,488 @@ void displaySetsChecks()
   QApplication::processEvents();
 }
 
+
+// Step 18: hide the set(s) of a picked entity (modal pick, undo, area pick,
+// Esc/q, Ctrl+click). Keys go through cgxForwardKey with explicit coordinates
+// (what the Qt key handler does with the cursor position), so no real mouse
+// is needed; the Ctrl+click goes through a real QMouseEvent on the 3D view.
+void hidePickChecks()
+{
+  CgxMainWindow *m = MW();
+  GraphicsView *g = GV();
+  if (!m || !g)
+    return;
+  auto fail = [](const char *what) {
+    std::fprintf(stderr, "SELFTEST-FAIL hidepick: %s\n", what);
+    ++s_failures;
+  };
+  auto run = [&](const char *cmd) {
+    sendText(g, cmd);
+    sendKey(g, '\r', QPoint());
+  };
+  auto idxOf = [](const char *name) {
+    for (int i = 0; i < cgxDsSetSlots(); i++)
+      if (cgxDsSetValid(i) && QString::fromUtf8(cgxDsSetName(i)) == QLatin1String(name))
+        return i;
+    return -1;
+  };
+  auto mask = [&](const char *name) {
+    const int i = idxOf(name);
+    return i < 0 ? -1 : cgxDsDisplayedMask(i);
+  };
+  const int eBit = 1 << 1, nBit = 1 << 0;
+  const int W = g->width(), H = g->height(), w1id = cgxGraphicsId();
+
+  run("seta HPa e all");
+  run("seta HPb e all");
+  run("seta HPn n all");
+  run("plus e HPa r");
+  run("plus e HPb g");
+  run("plus n HPn b");
+  QApplication::processEvents();
+  if (mask("HPa") != eBit || mask("HPb") != eBit || mask("HPn") != nBit)
+  {
+    fail("setup: sets not displayed");
+    return;
+  }
+
+  // menu entry: first entry of the popup, enabled when nothing is active
+  DisplaySetsMenu *dm = cgxDisplaySetsMenu(m);
+  dm->popup(m->mapToGlobal(QPoint(60, 40)));
+  QApplication::processEvents();
+  QAction *first = dm->actions().isEmpty() ? nullptr : dm->actions().first();
+  std::fprintf(stderr, "SELFTEST hidepick-menu first=[%s] enabled=%d\n",
+               first ? first->text().toUtf8().constData() : "", first ? first->isEnabled() : -1);
+  if (!first || first != dm->hideAction() || !first->isEnabled())
+    fail("menu entry missing / not first / not enabled");
+  dm->hide();
+  QApplication::processEvents();
+
+  // 1) modal pick: scan the view until an element is hit
+  if (!cgxDsHidePickBegin() || !cgxDsHidePickActive() || !pickFlag)
+  {
+    fail("modal pick did not start");
+    return;
+  }
+  int hx = -1, hy = -1;
+  for (int y = 10; y < H && hx < 0; y += 12)
+    for (int x = 10; x < W; x += 12)
+    {
+      cgxForwardKey(w1id, 'e', (int)x, (int)y);
+      if (mask("HPa") != eBit)
+      {
+        hx = x;
+        hy = y;
+        break;
+      }
+    }
+  std::fprintf(stderr, "SELFTEST hidepick-hit at=%d,%d HPa=%d HPb=%d HPn=%d\n", hx, hy, mask("HPa"),
+               mask("HPb"), mask("HPn"));
+  if (hx < 0)
+  {
+    fail("no element hit anywhere in the view");
+    cgxForwardKey(w1id, 'q', 0, 0);
+    return;
+  }
+  if (mask("HPa") != 0 || mask("HPb") != 0)
+    fail("both sets containing the picked element must be hidden");
+  if (mask("HPn") != nBit)
+    fail("node set must stay displayed when an element is picked");
+  // 2) undo restores both
+  cgxForwardKey(w1id, 'u', hx, hy);
+  if (mask("HPa") != eBit || mask("HPb") != eBit)
+    fail("undo did not show both sets again");
+  // 3) area mode: a (all in area), r r = whole view, then e at the centre
+  cgxForwardKey(w1id, 'a', hx, hy);
+  cgxForwardKey(w1id, 'r', 5, 5);
+  cgxForwardKey(w1id, 'r', W - 5, H - 5);
+  cgxForwardKey(w1id, 'e', W / 2, H / 2);
+  std::fprintf(stderr, "SELFTEST hidepick-area HPa=%d HPb=%d HPn=%d\n", mask("HPa"), mask("HPb"),
+               mask("HPn"));
+  if (mask("HPa") != 0 || mask("HPb") != 0 || mask("HPn") != nBit)
+    fail("area pick must hide all element sets in the area and keep the node set");
+  cgxForwardKey(w1id, 'u', 0, 0);
+  if (mask("HPa") != eBit || mask("HPb") != eBit)
+    fail("undo after area pick");
+  // 4) keys that make no sense here are swallowed (m would plot 'nt all')
+  const int psetsBefore = cgxDsDisplayedMask(idxOf("HPn"));
+  cgxForwardKey(w1id, 'm', hx, hy);
+  cgxForwardKey(w1id, 't', hx, hy);
+  if (mask("HPn") != psetsBefore || !pickFlag)
+    fail("max/min or text key leaked into the hide-pick mode");
+  // 5) Esc ends the mode and removes the helper set
+  cgxForwardKey(w1id, 27, hx, hy);
+  if (pickFlag || cgxDsHidePickActive() || !cgxDsCanHidePick())
+    fail("Esc did not end the hide-pick mode");
+  // 6) Ctrl+click one-shot on a real QMouseEvent
+  {
+    const QPointF lp(hx, hy);
+    QMouseEvent press(QEvent::MouseButtonPress, lp, g->mapToGlobal(lp), Qt::LeftButton,
+                      Qt::LeftButton, Qt::ControlModifier);
+    QApplication::sendEvent(g, &press);
+    QMouseEvent rel(QEvent::MouseButtonRelease, lp, g->mapToGlobal(lp), Qt::LeftButton,
+                    Qt::NoButton, Qt::ControlModifier);
+    QApplication::sendEvent(g, &rel);
+  }
+  std::fprintf(stderr, "SELFTEST hidepick-ctrlclick HPa=%d HPb=%d HPn=%d pickFlag=%d\n", mask("HPa"),
+               mask("HPb"), mask("HPn"), (int)pickFlag);
+  if (mask("HPa") != 0 || mask("HPb") != 0)
+    fail("Ctrl+click did not hide the sets of the clicked element");
+  if (mask("HPn") != nBit)
+    fail("Ctrl+click hid the node set");
+  if (pickFlag || !cgxDsCanHidePick())
+    fail("Ctrl+click left the pick mode active");
+  // 7) Ctrl+click on empty space changes nothing
+  run("plus e HPa r");
+  {
+    const QPointF lp(2, H - 2);
+    QMouseEvent press(QEvent::MouseButtonPress, lp, g->mapToGlobal(lp), Qt::LeftButton,
+                      Qt::LeftButton, Qt::ControlModifier);
+    QApplication::sendEvent(g, &press);
+    QMouseEvent rel(QEvent::MouseButtonRelease, lp, g->mapToGlobal(lp), Qt::LeftButton,
+                    Qt::NoButton, Qt::ControlModifier);
+    QApplication::sendEvent(g, &rel);
+  }
+  if (mask("HPa") != eBit || pickFlag)
+    fail("Ctrl+click on empty space changed something");
+  // 8) internal helper sets never show up in the menu list
+  dm->popup(m->mapToGlobal(QPoint(60, 40)));
+  QApplication::processEvents();
+  bool leaked = false;
+  for (int r = 0; r < dm->table()->rowCount(); r++)
+    if (QTableWidgetItem *it = dm->table()->item(r, 0))
+      if (it->text().startsWith(QLatin1Char('-')))
+        leaked = true;
+  if (leaked)
+    fail("internal '-' set listed in the menu");
+  dm->hide();
+  QApplication::processEvents();
+
+  // 9) set-by-set loop on an area pick: disjoint single-element sets
+  run("minus e HPa");
+  run("minus e HPb");
+  QStringList hq;
+  for (int k = 1; k <= 300; ++k)
+  {
+    char cmd[64];
+    std::snprintf(cmd, sizeof cmd, "seta HQ%d e %d", k, k);
+    run(cmd);
+    const int ix = idxOf((std::string("HQ") + std::to_string(k)).c_str());
+    if (ix >= 0 && cgxDsEntityCount(ix, 1) > 0)
+    {
+      std::snprintf(cmd, sizeof cmd, "plus e HQ%d", k);
+      run(cmd);
+      hq << QStringLiteral("HQ%1").arg(k);
+    }
+  }
+  std::fprintf(stderr, "SELFTEST hidepick-many sets=%d\n", (int)hq.size());
+  if (hq.size() < 5)
+  {
+    fail("could not create enough single-element sets");
+    return;
+  }
+  QElapsedTimer tm;
+  tm.start();
+  cgxDsHidePickBegin();
+  cgxForwardKey(w1id, 'a', 0, 0);
+  cgxForwardKey(w1id, 'r', 2, 2);
+  cgxForwardKey(w1id, 'r', W - 2, H - 2);
+  cgxForwardKey(w1id, 'e', W / 2, H / 2);
+  const qint64 ms = tm.elapsed();
+  int still = 0, hidden = 0;
+  for (const QString &n : hq)
+    (mask(n.toUtf8().constData()) ? still : hidden)++;
+  std::fprintf(stderr, "SELFTEST hidepick-many-result hidden=%d still=%d ms=%lld\n", hidden, still,
+               (long long)ms);
+  if (hidden == 0)
+    fail("area pick over many sets hid nothing");
+  if (ms > 20000)
+    fail("area pick over many sets too slow");
+  cgxForwardKey(w1id, 'u', 0, 0);
+  int back = 0;
+  for (const QString &n : hq)
+    back += mask(n.toUtf8().constData()) ? 1 : 0;
+  if (back != hq.size())
+    fail("undo did not restore all sets of the area pick");
+
+  // 10) a set that contains every element is hidden first and removes all
+  // elements from the list: the single-element sets stay displayed
+  cgxForwardKey(w1id, 'q', 0, 0); // leave the pick mode before typing commands
+  if (cgxDsHidePickActive())
+    fail("q did not end the pick mode");
+  run("plus e HPa r");
+  cgxDsHidePickBegin();
+  cgxForwardKey(w1id, 'a', 0, 0);
+  cgxForwardKey(w1id, 'r', 2, 2);
+  cgxForwardKey(w1id, 'r', W - 2, H - 2);
+  cgxForwardKey(w1id, 'e', W / 2, H / 2);
+  int rest = 0;
+  for (const QString &n : hq)
+    rest += mask(n.toUtf8().constData()) ? 1 : 0;
+  std::fprintf(stderr, "SELFTEST hidepick-superset HPa=%d HQ-still-displayed=%d of %d\n", mask("HPa"),
+               rest, (int)hq.size());
+  // the first (smallest) element lies in HPa and in one HQ set: both are hidden,
+  // HPa holds every element, so the list is empty afterwards and all other
+  // single-element sets must stay displayed
+  if (mask("HPa") != 0)
+    fail("superset not hidden");
+  if (rest != (int)hq.size() - 1)
+    fail("elements of the hidden superset were not removed from the list");
+  cgxForwardKey(w1id, 'q', 0, 0);
+}
+
+
+// Step 19: rename sets in the Display Sets popup (inline editor via real
+// mouse events on the table viewport and real key events on the editor).
+void renameChecks()
+{
+  CgxMainWindow *m = MW();
+  GraphicsView *g = GV();
+  if (!m || !g)
+    return;
+  auto fail = [](const char *what) {
+    std::fprintf(stderr, "SELFTEST-FAIL rename: %s\n", what);
+    ++s_failures;
+  };
+  auto run = [&](const char *cmd) {
+    sendText(g, cmd);
+    sendKey(g, '\r', QPoint());
+  };
+  auto idxOf = [](const char *name) {
+    for (int i = 0; i < cgxDsSetSlots(); i++)
+      if (cgxDsSetValid(i) && QString::fromUtf8(cgxDsSetName(i)) == QLatin1String(name))
+        return i;
+    return -1;
+  };
+  auto mask = [&](const char *name) {
+    const int i = idxOf(name);
+    return i < 0 ? -1 : cgxDsDisplayedMask(i);
+  };
+  DisplaySetsMenu *dm = cgxDisplaySetsMenu(m);
+  QTableWidget *tb = dm->table();
+  auto rowOf = [&](const char *n) { return dm->rowForSet(QString::fromLatin1(n)); };
+  auto cellPos = [&](int row, int col, bool nameText) {
+    tb->scrollToItem(tb->item(row, col));
+    QApplication::processEvents();
+    const QRect r = tb->visualRect(tb->model()->index(row, col));
+    return nameText ? QPoint(r.right() - 4, r.center().y()) : QPoint(r.left() + 8, r.center().y());
+  };
+  auto mouse = [&](QEvent::Type type, const QPoint &lp) {
+    QWidget *vp = tb->viewport();
+    QMouseEvent ev(type, QPointF(lp), QPointF(vp->mapToGlobal(lp)), Qt::LeftButton,
+                   type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(vp, &ev);
+  };
+  auto openEditor = [&](const char *name) {
+    const int r = rowOf(name);
+    if (r < 0)
+      return false;
+    const QPoint p = cellPos(r, 0, true);
+    mouse(QEvent::MouseButtonPress, p);
+    mouse(QEvent::MouseButtonRelease, p);
+    mouse(QEvent::MouseButtonDblClick, p);
+    mouse(QEvent::MouseButtonRelease, p);
+    QApplication::processEvents();
+    return dm->editor() != nullptr;
+  };
+  auto typeAndEnter = [&](const char *text) {
+    if (!dm->editor())
+      return;
+    dm->editor()->setText(QString::fromUtf8(text));
+    sendKey(dm->editor(), '\r', QPoint());
+    QApplication::processEvents();
+  };
+
+  run("seta RNa e all");
+  run("seta RNb e all");
+  run("seta RNc e all");
+  run("seta RNc n all");
+  dm->popup(m->mapToGlobal(QPoint(60, 40)));
+  QApplication::processEvents();
+  if (rowOf("RNa") < 0 || rowOf("RNb") < 0 || rowOf("RNc") < 0)
+  {
+    fail("setup: rows missing");
+    dm->hide();
+    return;
+  }
+
+  // 1) click areas: name text does not toggle, checkbox area does
+  {
+    const int r = rowOf("RNa");
+    const QPoint pn = cellPos(r, 0, true);
+    mouse(QEvent::MouseButtonPress, pn);
+    mouse(QEvent::MouseButtonRelease, pn);
+    if (mask("RNa") != 0)
+      fail("a click on the name text toggled the set");
+    const QPoint pc = cellPos(r, 0, false);
+    mouse(QEvent::MouseButtonPress, pc);
+    mouse(QEvent::MouseButtonRelease, pc);
+    if (mask("RNa") == 0 || tb->item(r, 0)->checkState() != Qt::Checked)
+      fail("a click on the checkbox area did not switch the set on");
+    mouse(QEvent::MouseButtonPress, pc);
+    mouse(QEvent::MouseButtonRelease, pc);
+    if (mask("RNa") != 0)
+      fail("second checkbox click did not switch the set off");
+  }
+
+  // 2) double-click opens the editor with keyboard focus; accept renames
+  const int idxA = idxOf("RNa");
+  if (!openEditor("RNa"))
+  {
+    fail("double-click did not open the editor");
+    dm->hide();
+    return;
+  }
+  std::fprintf(stderr, "SELFTEST rename-editor focus=%d text=[%s]\n",
+               QApplication::focusWidget() == dm->editor(),
+               dm->editor()->text().toUtf8().constData());
+  if (QApplication::focusWidget() != dm->editor())
+    fail("editor does not have the keyboard focus inside the popup");
+  dm->grab().save(QString::fromLocal8Bit(shotDir()) + QStringLiteral("/s19_rename_editor.png"));
+  if (mask("RNa") != 0)
+    fail("double-click toggled the set");
+  // real key events: select-all is active, typing replaces the name
+  sendText(dm->editor(), "RNnew");
+  sendKey(dm->editor(), '\r', QPoint());
+  QApplication::processEvents();
+  std::fprintf(stderr, "SELFTEST rename-accept old=%d new=%d editorGone=%d\n", idxOf("RNa"),
+               idxOf("RNnew"), dm->editor() == nullptr);
+  if (idxOf("RNa") >= 0 || idxOf("RNnew") != idxA)
+    fail("rename not applied to the same set");
+  if (dm->editor())
+    fail("editor still open after a successful rename");
+  if (rowOf("RNnew") < 0 || rowOf("RNa") >= 0)
+    fail("popup list not updated after the rename");
+  // the renamed set still works through the normal commands and the menu
+  run("plus e RNnew r");
+  if (mask("RNnew") == 0)
+    fail("plus with the new name does not work");
+  run("minus e RNnew");
+  if (mask("RNnew") != 0)
+    fail("minus with the new name does not work");
+  dm->pollNow(); // the commands above changed the state; a real click comes after the timer
+  dm->clickCell(rowOf("RNnew"), 0);
+  if (mask("RNnew") == 0)
+    fail("menu toggle after rename does not work");
+  dm->clickCell(rowOf("RNnew"), 0);
+
+  if (cgxDsHidePickActive())
+    fail("Enter in the editor triggered the menu's Hide-set action");
+  // 3) refused names keep the old name and the editor open
+  const char *bad[] = {"all", "-x", "a b", "a*", "123", "", "RNb", ":NOSAVE", "+EDGE", "+CF1",
+                       "caf\xc3\xa9"};
+  for (const char *b : bad)
+  {
+    if (!openEditor("RNnew"))
+    {
+      fail("could not reopen the editor");
+      break;
+    }
+    typeAndEnter(b);
+    const bool kept = idxOf("RNnew") == idxA;
+    const bool open = dm->editor() != nullptr;
+    std::fprintf(stderr, "SELFTEST rename-refuse [%s] kept=%d editorOpen=%d\n", b, kept, open);
+    if (!kept || !open)
+      fail("a refused name was accepted or the editor closed");
+    sendSpecial(dm->editor(), Qt::Key_Escape);
+    QApplication::processEvents();
+    if (dm->editor())
+      fail("Esc did not close the editor");
+  }
+  // 4) Esc cancels a valid pending name
+  if (openEditor("RNnew"))
+  {
+    dm->editor()->setText(QStringLiteral("RNnever"));
+    sendSpecial(dm->editor(), Qt::Key_Escape);
+    QApplication::processEvents();
+    if (idxOf("RNnever") >= 0 || idxOf("RNnew") != idxA || dm->editor())
+      fail("Esc did not cancel the rename");
+  }
+  // 5) protected sets are not editable
+  if (rowOf("all") >= 0)
+  {
+    dm->editName(rowOf("all"));
+    if (dm->editor())
+      fail("set 'all' must not be editable");
+  }
+
+  // 6) a rename from the command line shows in the open popup
+  run("rnam RNb RNcmd");
+  dm->pollNow();
+  if (rowOf("RNcmd") < 0 || rowOf("RNb") >= 0)
+    fail("rnam from the command line not reflected in the open popup");
+  // 7) an edit in progress survives changes elsewhere (no rebuild under the editor)
+  if (openEditor("RNcmd"))
+  {
+    dm->editor()->setText(QStringLiteral("RNhalf"));
+    run("seta RNlate e all");
+    dm->pollNow();
+    const bool alive = dm->editor() && dm->editor()->text() == QLatin1String("RNhalf");
+    std::fprintf(stderr, "SELFTEST rename-live editorAlive=%d\n", alive);
+    if (!alive)
+      fail("an open editor was destroyed by a refresh");
+    sendSpecial(dm->editor(), Qt::Key_Escape);
+    QApplication::processEvents();
+    dm->pollNow();
+    if (rowOf("RNlate") < 0)
+      fail("pending change not shown after the edit ended");
+    // ... but renaming the set under the editor from outside cancels it
+    if (openEditor("RNcmd"))
+    {
+      run("rnam RNcmd RNoutside");
+      dm->pollNow();
+      if (dm->editor())
+        fail("editor stayed open although its set was renamed elsewhere");
+      if (rowOf("RNoutside") < 0)
+        fail("outside rename not shown");
+    }
+  }
+
+  // 8) remembered entity selection follows a rename
+  {
+    const int r = rowOf("RNc");
+    dm->clickCell(r, 1 + 0); // hidden set: remember n in addition to e
+    if (openEditor("RNc"))
+    {
+      typeAndEnter("RNc2");
+      dm->clickCell(rowOf("RNc2"), 0);
+      const int mk = mask("RNc2");
+      std::fprintf(stderr, "SELFTEST rename-selection mask=%d\n", mk);
+      if (mk != ((1 << 0) | (1 << 1)))
+        fail("remembered entity selection lost by the rename");
+      dm->clickCell(rowOf("RNc2"), 0);
+    }
+    else
+      fail("could not rename RNc");
+  }
+  dm->hide();
+  QApplication::processEvents();
+
+  // 9) hide-pick undo still finds a set renamed after it was hidden
+  run("plus e RNnew g");
+  if (cgxDsHidePickBegin())
+  {
+    const int W = g->width(), H = g->height(), w1id = cgxGraphicsId();
+    cgxForwardKey(w1id, 'a', 0, 0);
+    cgxForwardKey(w1id, 'r', 2, 2);
+    cgxForwardKey(w1id, 'r', W - 2, H - 2);
+    cgxForwardKey(w1id, 'e', W / 2, H / 2);
+    if (mask("RNnew") != 0)
+      fail("setup: area pick did not hide RNnew");
+    dm->popup(m->mapToGlobal(QPoint(60, 40)));
+    QApplication::processEvents();
+    if (openEditor("RNnew"))
+      typeAndEnter("RNundo");
+    dm->hide();
+    QApplication::processEvents();
+    cgxForwardKey(w1id, 'u', 0, 0);
+    std::fprintf(stderr, "SELFTEST rename-undo RNundo=%d\n", mask("RNundo"));
+    if (mask("RNundo") <= 0)
+      fail("undo did not restore the set that was renamed after hiding");
+    cgxForwardKey(w1id, 'q', 0, 0);
+  }
+}
+
 void step(int n);
 void next(int n, int ms)
 {
@@ -1263,6 +1746,8 @@ void step(int n)
   {
     selectionChecks();
     displaySetsChecks();
+    hidePickChecks();
+    renameChecks();
     if (s_failures)
     {
       std::fprintf(stderr, "SELFTEST-FAILED failures=%d\n", s_failures);

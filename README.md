@@ -438,6 +438,18 @@ out). More sets than fit the window get a scrollbar on the right.
   be used as before. The list also
   updates live while it is open (sets created, changed or deleted by
   commands, scripts or meshing).
+- **Rename a set:** double-click its name (or hover the row and press F2),
+  type the new name, Enter accepts, Esc cancels. Only the checkbox next to the
+  name switches the set on/off. Names must be visible ASCII without blanks, not
+  contain `*`, not start with `-`, not be a pure number and not exist already;
+  `all` and cgx's internal sets cannot be renamed. This is the `rnam` command.
+- **Hide a set by picking an entity:** the first entry of the popup, *Hide set
+  by picking (Ctrl+click)*, starts a pick: put the cursor on an entity and press
+  its type key (`n e f p l s b S L`); every displayed set containing it is hidden
+  (`minus`). `a` before the key hides all sets with entities inside the pick area
+  (`r r` sets the area like in `qadd`), `u` shows the last hidden sets again,
+  `q` or Esc ends. Shortcut: **Ctrl+left-click** on the model hides the set(s)
+  of the entity nearest to you in one step.
 
 ## 6. Verification — the checks that were run on this machine
 

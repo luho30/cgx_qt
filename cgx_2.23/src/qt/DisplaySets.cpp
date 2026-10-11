@@ -21,14 +21,22 @@
 /* --------------------------------------------------------------------  */
 
 #include "DisplaySets.h"
+#include "CgxMainWindow.h"
+#include "CgxViews.h"
+#include "glue.h"
 #include "DisplaySetsBridge.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QColor>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QHeaderView>
 #include <QIcon>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QMouseEvent>
+#include <QToolTip>
 #include <QPixmap>
 #include <QScreen>
 #include <QSignalBlocker>
@@ -92,7 +100,24 @@ DisplaySetsMenu::DisplaySetsMenu(QWidget *parent) : QMenu(parent)
   m_table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded); // right-hand scrollbar when needed
   m_table->setMouseTracking(true);
-  connect(m_table, &QTableWidget::cellClicked, this, [this](int r, int c) { onCellClicked(r, c); });
+  // Clicks are interpreted here (not via cellClicked): only the checkbox/colour
+  // swatch area of the name cell toggles the set, the name text itself is for
+  // renaming (double-click), so the two must be told apart by position.
+  m_table->viewport()->installEventFilter(this);
+
+  // Step 18: modal "hide the set of a picked entity" (Ctrl+click does the same
+  // as a one-shot). Deferred so the menu is gone and the 3D view owns the focus
+  // when the pick keys start.
+  m_hideAct = addAction(QStringLiteral("Hide set by picking (Ctrl+click)"));
+  connect(m_hideAct, &QAction::triggered, this, []() {
+    QTimer::singleShot(0, []() {
+      if (CgxMainWindow *m = cgxMainWindow())
+        if (m->graphicsView())
+          m->graphicsView()->setFocus(Qt::OtherFocusReason);
+      cgxDsHidePickBegin();
+    });
+  });
+  addSeparator();
 
   auto *act = new QWidgetAction(this);
   act->setDefaultWidget(m_table);
@@ -101,6 +126,7 @@ DisplaySetsMenu::DisplaySetsMenu(QWidget *parent) : QMenu(parent)
   // The popup must always show the live legacy state (sets can be created or
   // plotted from the command line at any time).
   connect(this, &QMenu::aboutToShow, this, [this]() {
+    m_hideAct->setEnabled(cgxDsCanHidePick() != 0);
     rebuild();
     m_timer->start();
   });
@@ -118,6 +144,14 @@ void DisplaySetsMenu::checkForChanges()
 {
   if (cgxDsSignature() == m_signature)
     return;
+  if (m_editor)
+  {
+    // Never rebuild under an open editor (it would vanish while typing). Only
+    // if the set being renamed itself changed behind our back, drop the edit.
+    if (cgxDsSetValid(m_editIdx) && QString::fromUtf8(cgxDsSetName(m_editIdx)) == m_editOld)
+      return;
+    cancelEdit();
+  }
   const int scroll = m_table->verticalScrollBar()->value();
   rebuild();
   m_table->verticalScrollBar()->setValue(scroll);
@@ -139,6 +173,7 @@ int DisplaySetsMenu::maskFor(int setIdx) const
 
 void DisplaySetsMenu::rebuild()
 {
+  cancelEdit(); // the editor sits on a row that is about to be replaced
   const QSignalBlocker block(m_table);
   m_signature = cgxDsSignature();
   // forget remembered selections of sets that no longer exist (a recreated
@@ -329,4 +364,161 @@ void DisplaySetsMenu::onCellClicked(int row, int col)
   std::fflush(stdout);
   m_signature = cgxDsSignature(); // our own change is not "stale"
   refreshStates();
+}
+
+// ---- Step 19: rename -------------------------------------------------------
+
+bool DisplaySetsMenu::inToggleArea(int row, const QPoint &vp) const
+{
+  // checkbox indicator + colour swatch at the left of the name cell
+  const QRect r = m_table->visualRect(m_table->model()->index(row, 0));
+  const int w = m_table->style()->pixelMetric(QStyle::PM_IndicatorWidth) + 12 + 16;
+  return vp.x() < r.left() + w;
+}
+
+bool DisplaySetsMenu::eventFilter(QObject *watched, QEvent *event)
+{
+  if (watched == m_editor && m_editor && event->type() == QEvent::KeyPress)
+  {
+    auto *ke = static_cast<QKeyEvent *>(event);
+    if (ke->key() == Qt::Key_Escape)
+    {
+      cancelEdit();
+      return true; // do not let the menu close
+    }
+    if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter)
+    {
+      // QLineEdit ignores Return after returnPressed so a dialog could use it;
+      // here it would travel up to the menu and trigger its current action
+      // ("Hide set by picking"). Consume it.
+      commitEdit();
+      return true;
+    }
+    return false;
+  }
+  if (watched != m_table->viewport())
+    return QMenu::eventFilter(watched, event);
+
+  const QEvent::Type t = event->type();
+  if (t == QEvent::MouseMove)
+  {
+    auto *me = static_cast<QMouseEvent *>(event);
+    m_hoverRow = m_table->rowAt(me->pos().y());
+    return false;
+  }
+  if (t != QEvent::MouseButtonPress && t != QEvent::MouseButtonDblClick)
+    return false;
+  auto *me = static_cast<QMouseEvent *>(event);
+  if (me->button() != Qt::LeftButton)
+    return false;
+  if (m_editor)
+    cancelEdit(); // a click elsewhere ends the edit
+  const int row = m_table->rowAt(me->pos().y());
+  const int col = m_table->columnAt(me->pos().x());
+  if (row < 0 || col < 0)
+    return true;
+  if (col == 0 && !inToggleArea(row, me->pos()))
+  {
+    if (t == QEvent::MouseButtonDblClick)
+      editName(row);
+    return true; // a single click on the name text does nothing
+  }
+  onCellClicked(row, col);
+  return true;
+}
+
+void DisplaySetsMenu::keyPressEvent(QKeyEvent *event)
+{
+  if (event->key() == Qt::Key_F2 && m_hoverRow >= 0)
+  {
+    editName(m_hoverRow);
+    event->accept();
+    return;
+  }
+  QMenu::keyPressEvent(event);
+}
+
+void DisplaySetsMenu::editName(int row)
+{
+  cancelEdit();
+  QTableWidgetItem *n = m_table->item(row, 0);
+  if (!n || !(n->flags() & Qt::ItemIsEnabled))
+    return;
+  const int idx = n->data(Qt::UserRole).toInt();
+  if (!cgxDsSetValid(idx) || QString::fromUtf8(cgxDsSetName(idx)) != n->text() ||
+      cgxDsSignature() != m_signature)
+  {
+    checkForChanges();
+    return;
+  }
+  if (cgxDsIsProtected(idx))
+  {
+    std::printf(" rename: set %s is used by cgx by name and cannot be renamed\n", cgxDsSetName(idx));
+    std::fflush(stdout);
+    QToolTip::showText(QCursor::pos(), QStringLiteral("This set is used by cgx by name and cannot be renamed"),
+                       m_table);
+    return;
+  }
+  m_table->scrollToItem(n);
+  m_editIdx = idx;
+  m_editOld = n->text();
+  m_editor = new QLineEdit(m_table->viewport());
+  m_editor->setMaxLength(100);
+  m_editor->setText(m_editOld);
+  m_editor->installEventFilter(this);
+  QRect r = m_table->visualRect(m_table->model()->index(row, 0));
+  const int off = m_table->style()->pixelMetric(QStyle::PM_IndicatorWidth) + 12 + 16;
+  r.setLeft(r.left() + off);
+  m_editor->setGeometry(r.adjusted(0, 1, -1, -1));
+  m_editor->show();
+  m_editor->setFocus(Qt::OtherFocusReason);
+  m_editor->selectAll();
+}
+
+void DisplaySetsMenu::showEditError(const QString &msg)
+{
+  if (!m_editor)
+    return;
+  m_editor->setStyleSheet(QStringLiteral("QLineEdit { border: 1px solid #c00; }"));
+  QToolTip::showText(m_editor->mapToGlobal(QPoint(0, m_editor->height())), msg, m_editor);
+}
+
+void DisplaySetsMenu::commitEdit()
+{
+  if (!m_editor)
+    return;
+  const QString text = m_editor->text();
+  const QByteArray utf8 = text.toUtf8();
+  char err[256] = "";
+  if (cgxDsRename(m_editIdx, utf8.constData(), err, sizeof err))
+  {
+    std::printf(" rename: %s\n", err); // the editor stays open, the old name stays
+    std::fflush(stdout);
+    showEditError(QString::fromUtf8(err));
+    return;
+  }
+  // our remembered entity selection follows the set
+  auto it = m_selected.find(m_editOld);
+  if (it != m_selected.end())
+  {
+    m_selected[text] = it->second;
+    m_selected.erase(m_editOld);
+  }
+  const int scroll = m_table->verticalScrollBar()->value();
+  cancelEdit();
+  rebuild();
+  m_table->verticalScrollBar()->setValue(scroll);
+}
+
+void DisplaySetsMenu::cancelEdit()
+{
+  if (!m_editor)
+    return;
+  QLineEdit *e = m_editor;
+  m_editor = nullptr;
+  m_editIdx = -1;
+  e->removeEventFilter(this);
+  e->hide();
+  e->deleteLater();
+  QToolTip::hideText();
 }

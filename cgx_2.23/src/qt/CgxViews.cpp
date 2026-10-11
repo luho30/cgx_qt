@@ -21,6 +21,7 @@
 /* --------------------------------------------------------------------  */
 
 #include "CgxViews.h"
+#include "DisplaySetsBridge.h"
 #include "glue.h"
 #include "../glut_constants.h"
 
@@ -205,6 +206,11 @@ void GraphicsView::paintGL()
   cgxCallGraphicsDisplay();
 }
 
+namespace
+{
+bool s_ctrlPickPress = false; // swallow the release of a Ctrl+click as well
+}
+
 void MenuView::mousePressEvent(QMouseEvent *event)
 {
   bool known = false;
@@ -213,6 +219,12 @@ void MenuView::mousePressEvent(QMouseEvent *event)
     return;
   // Seamless 3D interaction: clicking/dragging over the transparent legend
   // rotates/pans/zooms the underlying GraphicsView (w1).
+  if (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ControlModifier))
+  {
+    s_ctrlPickPress = true;
+    cgxDsHidePickAt(event->pos().x(), event->pos().y());
+    return;
+  }
   cgxForwardMouse(cgxGraphicsId(), b, 0 /*GLUT_DOWN*/, event->pos().x(), event->pos().y());
 }
 
@@ -222,6 +234,11 @@ void MenuView::mouseReleaseEvent(QMouseEvent *event)
   const int b = qtToGlutButton(event->button(), known);
   if (!known)
     return;
+  if (event->button() == Qt::LeftButton && s_ctrlPickPress)
+  {
+    s_ctrlPickPress = false;
+    return;
+  }
   cgxForwardMouse(cgxGraphicsId(), b, 1 /*GLUT_UP*/, event->pos().x(), event->pos().y());
 }
 
@@ -254,6 +271,14 @@ void GraphicsView::mousePressEvent(QMouseEvent *event)
   const int b = qtToGlutButton(event->button(), known);
   if (!known)
     return;
+  // Step 18: Ctrl+left-click hides the set(s) of the entity under the cursor.
+  if (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ControlModifier))
+  {
+    s_ctrlPickPress = true;
+    cgxDsHidePickAt(event->pos().x(), event->pos().y());
+    update();
+    return;
+  }
   // w1 has no menu attached in legacy: all buttons reach MouseState.
   cgxForwardMouse(cgxGraphicsId(), b, 0 /*GLUT_DOWN*/, event->pos().x(), event->pos().y());
 }
@@ -264,6 +289,11 @@ void GraphicsView::mouseReleaseEvent(QMouseEvent *event)
   const int b = qtToGlutButton(event->button(), known);
   if (!known)
     return;
+  if (event->button() == Qt::LeftButton && s_ctrlPickPress)
+  {
+    s_ctrlPickPress = false;
+    return;
+  }
   cgxForwardMouse(cgxGraphicsId(), b, 1 /*GLUT_UP*/, event->pos().x(), event->pos().y());
 }
 
