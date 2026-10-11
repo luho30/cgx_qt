@@ -31,7 +31,7 @@
 - Upstream cgx C code (`src/*.c`) is deliberately left nearly untouched. The Qt port is a shim layer:
   `cgx.h` includes `qt/qt_shim.h` under `CGX_QT`, which `#define`s each `glutX` call to a `cgxX` function in `qt/glue.cpp`.
   `cgx.c`'s `main` is renamed `cgx_main` by a compile definition; `qt/main.cpp` owns the real `main`.
-- Only three upstream files are edited, all under `#ifdef CGX_QT` or as include swaps: `cgx.h` (tail), `extUtil.h` (include block), `cgx.c` (`#ifndef CGX_QT` around 3 hardcopy bodies). New features go into `src/qt/`, not upstream files.
+- Only three upstream files are edited, all under `#ifdef CGX_QT` or as include swaps: `cgx.h` (tail), `extUtil.h` (include block), `cgx.c` (`#ifndef CGX_QT` around 3 hardcopy bodies). New features go into `src/qt/`, not upstream files. To change an upstream function, rename it by compile definition on `cgx.c` and wrap it (`main=cgx_main`, `minus=cgx_minus_legacy` -> `qt/MinusWildcard.c`).
 - A new `glut*` call in upstream code intentionally fails to link. Add a real shim, never a silent no-op.
 - Legacy window ids are routing keys: `w0` legend, `w1` 3D view, `w2` axes, `w3` command line; handlers are stored per window id (`activWindow`).
 - `cgx.h` has no `extern "C"` guards and pulls in the glut macros. C++ files must not include it; declare legacy C functions `extern "C"` at namespace scope (in `qt/glue.h`; block-scope `extern` gets C++ linkage and fails to link). For access to legacy structs (`set`, `pset`, ...) write a small C file with a plain-C header, like `qt/DisplaySetsBridge.{c,h}`.
@@ -53,5 +53,5 @@
 
 ## Port documentation (read before touching `src/qt/` or merging a new upstream cgx)
 - `cgx_2.23/QT-PORT.md` is the authoritative port log: section 1 file ownership, 4 upstream edits, 5 re-apply recipe for a new `cgx_X.XX`, 7 verification matrix.
-- Standing rule: every step updates the status line, adds a `### Step N` entry (last is Step 19, rename sets) and the section 1/4 tables if files change.
+- Standing rule: every step updates the status line, adds a `### Step N` entry (last is Step 20, minus wildcards) and the section 1/4 tables if files change.
 - `/usr/local/CalculiX/README.md` is the user-level install/run guide; update it for user-visible features.

@@ -1211,6 +1211,151 @@ void renameChecks()
   }
 }
 
+
+// Step 20: wildcards for `minus` (qt/MinusWildcard.c wraps the legacy minus).
+void minusWildcardChecks()
+{
+  CgxMainWindow *m = MW();
+  GraphicsView *g = GV();
+  if (!m || !g)
+    return;
+  auto fail = [](const char *what) {
+    std::fprintf(stderr, "SELFTEST-FAIL minuswild: %s\n", what);
+    ++s_failures;
+  };
+  auto run = [&](const char *cmd) {
+    sendText(g, cmd);
+    sendKey(g, '\r', QPoint());
+  };
+  auto idxOf = [](const char *name) {
+    for (int i = 0; i < cgxDsSetSlots(); i++)
+      if (cgxDsSetValid(i) && QString::fromUtf8(cgxDsSetName(i)) == QLatin1String(name))
+        return i;
+    return -1;
+  };
+  const int eBit = 1 << 1, nBit = 1 << 0;
+  auto mask = [&](const char *name) {
+    const int i = idxOf(name);
+    return i < 0 ? -1 : cgxDsDisplayedMask(i);
+  };
+  const char *names[] = {"WDdoor1", "WDdoor2", "WDxdoor", "WDwin"};
+  auto showAll = [&]() {
+    for (const char *n : names)
+      cgxDsShow(idxOf(n), 1);
+    cgxDsShow(idxOf("WDdoorn"), 0);
+  };
+  auto shownSet = [&]() {
+    QStringList l;
+    for (const char *n : names)
+      if (mask(n) & eBit)
+        l << QLatin1String(n);
+    return l;
+  };
+
+  for (const char *n : names)
+  {
+    char cmd[64];
+    std::snprintf(cmd, sizeof cmd, "seta %s e all", n);
+    run(cmd);
+  }
+  run("seta WDdoorn n all");
+  showAll();
+
+  // 1) basic: *door* removes the three door element sets, keeps WDwin and the node set
+  run("minus e *door*");
+  std::fprintf(stderr, "SELFTEST minuswild-basic shown=[%s] node=%d\n",
+               shownSet().join(QLatin1Char(',')).toUtf8().constData(), mask("WDdoorn") & nBit);
+  if (shownSet() != QStringList{QStringLiteral("WDwin")})
+    fail("*door* must remove exactly the door element sets");
+  if (!(mask("WDdoorn") & nBit))
+    fail("minus e must not remove a node set");
+
+  // 2) same rules as plus: minus e P removes exactly what plus e P showed
+  const char *pats[] = {"*door*", "WDdoor*", "*door1", "WD*", "W*oor", "*xdoor*", "*in"};
+  for (const char *pat : pats)
+  {
+    for (const char *n : names)
+      cgxDsHide(idxOf(n), 1);
+    char cmd[96];
+    std::snprintf(cmd, sizeof cmd, "plus e %s", pat);
+    run(cmd);
+    const QStringList viaPlus = shownSet();
+    showAll();
+    std::snprintf(cmd, sizeof cmd, "minus e %s", pat);
+    run(cmd);
+    QStringList removed;
+    for (const char *n : names)
+      if (!(mask(n) & eBit))
+        removed << QLatin1String(n);
+    std::fprintf(stderr, "SELFTEST minuswild-vs-plus [%s] plus=[%s] minus=[%s]\n", pat,
+                 viaPlus.join(QLatin1Char(',')).toUtf8().constData(),
+                 removed.join(QLatin1Char(',')).toUtf8().constData());
+    if (viaPlus.isEmpty() || viaPlus != removed)
+      fail("minus e <pattern> does not remove what plus e <pattern> shows");
+  }
+
+  // 3) no match: nothing changes (and, unlike plus, nothing is plotted)
+  showAll();
+  const unsigned long long sig = cgxDsSignature();
+  run("minus e *nomatchatall*");
+  if (cgxDsSignature() != sig)
+    fail("a non-matching pattern changed the display");
+
+  // 4) the set 'all' is never matched by a wildcard
+  const int allIdx = idxOf("all");
+  if (allIdx >= 0)
+  {
+    cgxDsShow(allIdx, 1);
+    run("minus e *l*");
+    if (!(mask("all") & eBit))
+      fail("a wildcard removed the set 'all'");
+    run("minus e all");
+    if (mask("all") & eBit)
+      fail("explicit minus e all stopped working");
+  }
+
+  // 5) names without '*' still go through the unchanged legacy path
+  showAll();
+  run("minus e WDwin");
+  if ((mask("WDwin") & eBit) || !(mask("WDdoor1") & eBit))
+    fail("plain minus e <set> broken");
+  // 6) the attribute/type letter still has to match
+  run("minus n WD*");
+  if (mask("WDdoorn") & nBit)
+    fail("minus n WD* must remove the node set");
+  if (!(mask("WDdoor1") & eBit))
+    fail("minus n WD* must not remove element sets");
+
+  // 7) many sets: one pass, one display-list rebuild
+  QStringList many;
+  for (int k = 1; k <= 300; ++k)
+  {
+    char cmd[64];
+    std::snprintf(cmd, sizeof cmd, "seta WS%d e %d", k, k);
+    run(cmd);
+    const QByteArray nm = QByteArray("WS") + QByteArray::number(k);
+    const int ix = idxOf(nm.constData());
+    if (ix >= 0 && cgxDsEntityCount(ix, 1) > 0)
+    {
+      cgxDsShow(ix, 1);
+      many << QString::fromLatin1(nm);
+    }
+  }
+  QElapsedTimer tm;
+  tm.start();
+  run("minus e WS*");
+  const qint64 ms = tm.elapsed();
+  int left = 0;
+  for (const QString &n : many)
+    left += (mask(n.toUtf8().constData()) & eBit) ? 1 : 0;
+  std::fprintf(stderr, "SELFTEST minuswild-many sets=%d left=%d ms=%lld\n", (int)many.size(), left,
+               (long long)ms);
+  if (many.size() < 5 || left != 0)
+    fail("minus e WS* did not remove all matching sets");
+  if (ms > 20000)
+    fail("minus e WS* too slow");
+}
+
 void step(int n);
 void next(int n, int ms)
 {
@@ -1748,6 +1893,7 @@ void step(int n)
     displaySetsChecks();
     hidePickChecks();
     renameChecks();
+    minusWildcardChecks();
     if (s_failures)
     {
       std::fprintf(stderr, "SELFTEST-FAILED failures=%d\n", s_failures);

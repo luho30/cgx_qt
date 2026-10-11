@@ -250,13 +250,16 @@ set(CGX_QT_SRCS
   qt/Hardcopy.cpp
   qt/DisplaySets.cpp
   qt/DisplaySetsBridge.c
+  qt/MinusWildcard.c
   qt/selftest.cpp
 )
 
 add_executable(cgx ${CGX_SLIB} ${CGX_CXX_SRCS} ${CGX_QT_SRCS})
 
 # Rename original main() in cgx.c to cgx_main() so qt/main.cpp owns entry.
-set_source_files_properties(cgx.c PROPERTIES COMPILE_DEFINITIONS "main=cgx_main")
+# Step 20: minus() gets wildcards (qt/MinusWildcard.c). The upstream body stays
+# untouched and is compiled under another name; the wrapper takes over `minus`.
+set_source_files_properties(cgx.c PROPERTIES COMPILE_DEFINITIONS "main=cgx_main;minus=cgx_minus_legacy")
 
 target_compile_definitions(cgx PRIVATE SEMINIT CGX_QT)
 

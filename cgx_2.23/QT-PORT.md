@@ -11,13 +11,13 @@ Goal: full swap of the vendored GLUT-3.5 windowing/event/menu layer for Qt6,
 in small behavior-checked steps. This file records **every modification** so
 the port can be re-applied onto a future upstream `cgx_X.XX` tarball.
 
-Port status: Steps 0–19 done — port complete (CMake build, Qt app shell,
+Port status: Steps 0–20 done — port complete (CMake build, Qt app shell,
 Qt viewport, input, menus, fonts/X11 removal, axes/cmdline widgets,
 header-only menubar, full-window 3D viewport with 100% transparent HUD legend overlay,
 semi-transparent in-window console panel, Qt-native hardcopy without ImageMagick,
 command line as an opaque overlay band over the whole view, last external
 `glut-3.5` include dependency replaced by an in-tree constants header,
-test hooks compiled out of the default build (security audit), "Display Sets" menu (Steps 16-19), sign-off with harness + matrices green).
+test hooks compiled out of the default build (security audit), "Display Sets" menu and `minus` wildcards (Steps 16-20), sign-off with harness + matrices green).
 
 Standing rule: this file is updated at the end of **every** step — status
 line above, a `### Step N` entry under §3, and any newly touched upstream
@@ -30,7 +30,7 @@ The port is designed so re-application is mechanical:
 
 | Path (relative to `cgx_X.XX/`) | Ownership | Notes |
 |---|---|---|
-| `src/qt/` (19 files) | **OURS, new** | `main.cpp`, `glue.h/.cpp`, `qt_shim.h`, `CgxMainWindow.h/.cpp`, `CgxViews.h/.cpp`, `CgxFont.cpp`, `selftest.cpp`, `ConsoleCapture.h/.cpp`, `ConsoleView.h/.cpp`, `Hardcopy.cpp`, `DisplaySets.h/.cpp`, `DisplaySetsBridge.h/.c`. Never exists upstream — copy verbatim. |
+| `src/qt/` (20 files) | **OURS, new** | `main.cpp`, `glue.h/.cpp`, `qt_shim.h`, `CgxMainWindow.h/.cpp`, `CgxViews.h/.cpp`, `CgxFont.cpp`, `selftest.cpp`, `ConsoleCapture.h/.cpp`, `ConsoleView.h/.cpp`, `Hardcopy.cpp`, `DisplaySets.h/.cpp`, `DisplaySetsBridge.h/.c`, `MinusWildcard.c`. Never exists upstream — copy verbatim. |
 | `tools/console_screencheck.py` | **OURS, new** | Real-screen check that the console panel is above the legend (§Step 11). Copy verbatim. |
 | `src/cmake/RunCgxCheck.cmake` | **OURS, new** | Build/install gate: headless `-bg` smoke + `--glcheck` OpenGL probe, with hard timeouts so it can never hang a build. Copy verbatim. |
 | `src/build.sh` | **OURS, new** | Configure+build+check wrapper that survives renaming/moving the tree (recreates a build dir whose cache belongs to another path). Copy verbatim, keep `+x`. |
@@ -39,7 +39,7 @@ The port is designed so re-application is mechanical:
 | `src/cgx.h` (tail, font tokens) | **Upstream touch 1** | Guarded `#ifdef CGX_QT` include of `qt/qt_shim.h` (see §4) + `GLUT_FONT` redefined to `(void*)0..5` tokens (Step 6; layout macros untouched). |
 | `src/extUtil.h` (include block) | **Upstream touch 2** | Deleted `#include <GL/glx.h>` (zero `glX*` calls; it had smuggled in `<X11/Xlib.h>`, now included directly for vestigial types), added `<GL/glu.h>` (was pulled in via `glut_cgx.h`), swapped `<GL/glut_cgx.h>` → `"glut_constants.h"` (Step 14) — see §4. |
 | `src/Makefile`, `src/Makefile.inc` | Upstream, retired | Kept as `Makefile.legacy.bak`, `Makefile.inc.legacy.bak` for diffing. |
-| `src/cgx.c` and everything else | **Upstream, UNTOUCHED** | `main()` renamed via compile flag, not by editing (§3). |
+| `src/cgx.c` and everything else | **Upstream, UNTOUCHED** | `main()` and `minus()` renamed via compile flags (`main=cgx_main;minus=cgx_minus_legacy`), not by editing (§3, Step 20). |
 | `../libSNL/` | Upstream sibling, untouched | Compiled and linked (`file(GLOB …)`) — a real build dependency. |
 | `../glut-3.5/` | **not needed (Step 14)** | Was header-only for `<GL/glut_cgx.h>`; now in-tree. The sibling may stay on disk for old cgx versions (2.5/2.22) but cgx_2.23 never reads it. |
 
@@ -238,8 +238,10 @@ without it the file builds exactly as upstream.
 ## 5. Re-apply recipe for a new upstream `cgx_X.XX`
 
 Assume a fresh unpack at `/usr/local/CalculiX/cgx_X.XX/` (keep old tree for
-diffing). Total: copy `qt/` (19 files) + `tools/` +
+diffing). Total: copy `qt/` (20 files) + `tools/` +
 `CMakeLists.txt`, apply the §4 edits (now three), sync lists.
+
+Compile definitions to keep in `CMakeLists.txt`: `set_source_files_properties(cgx.c ... "main=cgx_main;minus=cgx_minus_legacy")`. Check that upstream `minus` is still defined once in `cgx.c` and not used as another identifier there (`grep -nw minus cgx.c`).
 
 1. `cp -r <old>/src/qt <new>/src/qt && cp -r <old>/src/cmake <new>/src/ &&
    cp <old>/src/CMakeLists.txt <new>/src/ && cp <old>/src/build.sh
@@ -1172,6 +1174,35 @@ is displayed is unaffected.
   selection memory survives; hide-pick undo after a rename (proven able to fail:
   without moving the undo records it reports a FAIL). `s19_rename_editor.png`
   is written to the shot dir.
+
+### Step 20 — wildcards for `minus`
+
+`plus`/`plot` accept wildcards (`plus e *door*`, via `wildcard_plot()` in `cgx.c`);
+`minus` looked up exactly one set. Now `minus e *door*` works too, without editing
+`cgx.c`:
+
+- CMake compiles `cgx.c` with `-Dminus=cgx_minus_legacy`: the upstream body keeps
+  its exact text under that name, and every caller of `minus()` (command
+  interpreter, qenq max/min mode, the Display Sets bridge) links to the wrapper
+  `qt/MinusWildcard.c` instead (same trick as `main=cgx_main`).
+- No `*` in the set name (or `-bg`): straight pass-through to the legacy function,
+  so all old behaviour and messages are unchanged.
+- With `*`: matched against the sets *on the screen* (`pset[]`), with a copy of
+  `wildcard_plot`'s rules (every `*`-separated piece must occur in the name; a
+  first/last piece not bordered by `*` is only compared by its first/last
+  character), so `minus e P` removes exactly what `plus e P` displayed. Entity
+  letter must match (`m`→`e`), set `all` (index 0), sequences and internal `-`
+  sets are never matched. All matching `pset` entries are blanked and the display
+  lists are rebuilt **once** (legacy `minus` rebuilds them per displayed entry:
+  300 sets took 127 s, see Step 18); output is the usual ` set:<n> type:<t>
+  removed` per entry plus one summary line.
+- Unlike `plus`, a pattern that matches nothing does nothing (`plus e *nomatch*`
+  falls through to "plot every set").
+- Selftest (`minusWildcardChecks()`): `*door*` removes exactly the door element
+  sets and keeps a node set; for 7 patterns `minus e P` removes the same sets that
+  `plus e P` shows; no-match changes nothing; wildcard never removes `all`; plain
+  `minus e name` unchanged; `minus n WD*` only nodes; 300 sets in one call
+  (27 ms). Proven able to fail (wrapper bypassed → FAILs).
 
 ## 9. Roadmap — complete
 

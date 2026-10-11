@@ -438,6 +438,9 @@ out). More sets than fit the window get a scrollbar on the right.
   be used as before. The list also
   updates live while it is open (sets created, changed or deleted by
   commands, scripts or meshing).
+- **Wildcards in `minus`:** `minus e *door*` removes every displayed element set
+  whose name contains `door`, exactly the sets `plus e *door*` would show (same
+  matching rules; the set `all` is never matched by a wildcard).
 - **Rename a set:** double-click its name (or hover the row and press F2),
   type the new name, Enter accepts, Esc cancels. Only the checkbox next to the
   name switches the set on/off. Names must be visible ASCII without blanks, not
